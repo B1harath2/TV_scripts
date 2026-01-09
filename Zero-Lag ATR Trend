@@ -1,0 +1,133 @@
+/////////////////////////////////////////////////////////////// © BackQuant ///////////////////////////////////////////////////////////////
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BackQuant
+
+import TradingView/ta/12 as ta
+
+//@version=6
+indicator(title="Zero-Lag ATR Trend [BackQuant]", overlay=true)
+
+// Constants
+const string clc    = "Calculation Settings"
+const string plt    = "UI/ Plotting Settings"
+const color  GREEN  = #00ff00
+const color  RED    = #ff0000
+const string tt1    = "Price/series used to build the ZLMA centerline and the trailing ATR band calculation."
+const string tt2    = "Length used for the zero-lag moving average (ZLMA). Higher = smoother, lower = faster."
+const string tt3    = "Moving average type used inside the ZLMA calculation (and for zero-lag ATR smoothing). Different types change smoothness and responsiveness."
+const string tt4    = "Lookback used to compute True Range smoothing for the zero-lag ATR. Higher = smoother volatility estimate."
+const string tt5    = "Multiplier applied to the zero-lag ATR to set the trailing band distance. Higher = wider bands, fewer flips."
+
+// Inputs
+float  source       = input.source(close, "Calculation Source", group=clc, tooltip=tt1)
+int    len          = input.int(7, "ZLMA Length", minval=1, group=clc, tooltip=tt2)
+string maType       = input.string("HMA", "MA Type", options=["EMA","SMA","RMA","WMA","DEMA","HMA"], group=clc, tooltip=tt3)
+int    periodAtr    = input.int(14, "ATR Period", minval=1, group=clc, tooltip=tt4)
+float  factorAtr    = input.float(1.7, "ATR Factor", step=0.01, group=clc, tooltip=tt5)
+
+color  longcol      = input.color(GREEN, "Color Theme", group=plt, inline=plt)
+color  shortcol     = input.color(RED, " ", group=plt, inline=plt)
+bool   pltAtr       = input.bool(true, "Plot ATR on Chart?", group=plt)
+bool   pltCloud     = input.bool(true, "Show Ribbon on Chart?", group=plt)
+bool   paintCandles = input.bool(false, "Paint Candles According to Trend?", group=plt)
+bool   showls       = input.bool(true, "Show Long and Short Signals {𝕃 + 𝕊}", group =plt)
+
+// Types
+type tATR
+    float atrZL
+    float band
+
+type tTrail
+    float zlma
+    float upper
+    float lower
+    float out
+
+type tState
+    color trendCol
+    bool  longSig
+    bool  shortSig
+
+var tATR   ax  = tATR.new(na, na)
+var tTrail trl = tTrail.new(na, na, na, na)
+var tState st  = tState.new(color.white, false, false)
+
+// Methods
+method ma(simple string t, series float src, simple int l) =>
+    switch t
+        "EMA"  => ta.ema(src, l)
+        "SMA"  => ta.sma(src, l)
+        "RMA"  => ta.rma(src, l)
+        "WMA"  => ta.wma(src, l)
+        "DEMA" => ta.dema(src, l)
+        "HMA"  => ta.hma(src, l)
+
+method zlma(simple string t, series float src, simple int l) =>
+    float base = t.ma(src, l)
+    2.0 * base - t.ma(base, l)
+
+method al_atr(simple string t, simple int atrL) =>
+    t.zlma(ta.tr(true), atrL)
+
+// Core calculations
+calcTrail() =>
+    trl.zlma  := maType.zlma(source, len)
+
+    ax.atrZL  := maType.al_atr(periodAtr)
+    ax.band   := ax.atrZL * factorAtr
+
+    trl.upper := trl.zlma + ax.band
+    trl.lower := trl.zlma - ax.band
+
+    tTrail ptrl  = trl[1]
+    float  prevOut = na(ptrl) ? na : ptrl.out
+
+    trl.out := trl.zlma
+    trl.out := nz(prevOut, trl.out)
+
+    if trl.lower > trl.out
+        trl.out := trl.lower
+    if trl.upper < trl.out
+        trl.out := trl.upper
+
+calcSignals() =>
+    float z = trl.out
+
+    st.longSig  := ta.crossover(z, z[1])
+    st.shortSig := ta.crossunder(z, z[1])
+
+    if st.longSig
+        st.trendCol := longcol
+    if st.shortSig
+        st.trendCol := shortcol
+
+// Run
+calcTrail()
+calcSignals()
+
+// Plots
+bool isBull = st.trendCol == longcol
+bool isBear = st.trendCol == shortcol
+bool longOnce  = isBull and not isBull[1]
+bool shortOnce = isBear and not isBear[1]
+
+color ribColor = isBull ? longcol : isBear ? shortcol : na
+
+pCore  = plot(pltAtr ? trl.out : na, "ZL ATR Trend", color=ribColor, linewidth=2, style=plot.style_linebr)
+Cloud = plot(pltCloud?ta.sma(trl.out, 12):na, "Cloud Line", color.new(#00fff0, 100), editable = false)
+
+fill(pCore, Cloud, color.new(ribColor,40), "Cloud Fill")
+
+plotcandle(open, high, low, close, "Trend Candles",
+     st.trendCol, st.trendCol, true,
+     bordercolor=st.trendCol,
+     display=paintCandles ? display.all : display.none)
+
+// Alerts
+alertcondition(longOnce,  title="ZL ATR Trend Up",   message="ZL ATR Trend Up - {{ticker}} - {{interval}}")
+alertcondition(shortOnce, title="ZL ATR Trend Down", message="ZL ATR Trend Down - {{ticker}} - {{interval}}")
+
+// Long and Short Signals
+plotshape(longOnce, "Long Signal", shape.triangleup, location.belowbar, longcol, 0, "𝕃", longcol, true, size.small, display=showls?display.all:display.none)
+plotshape(shortOnce, "Short Signal", shape.triangledown, location.abovebar, shortcol, 0, "𝕊", shortcol, true, size.small, display=showls?display.all:display.none)
+/////////////////////////////////////////////////////////////// © BackQuant ///////////////////////////////////////////////////////////////
