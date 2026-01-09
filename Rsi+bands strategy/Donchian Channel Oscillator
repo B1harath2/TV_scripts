@@ -1,0 +1,101 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © eykpunter
+
+//@version=5
+indicator(title="Donchian Channel Oscillator", shorttitle = "DonOsc", overlay=false)
+//inputs
+pertttext="Script uses timeframe to set lookback - month and week: 14, day: 21, 4hour and 3hour:28, 1hour and 45min: 35, 15min: 42, 5min and 3min: 49, 1min: 56"
+perwish=input.bool(true, "script sets lookback overrides user", tooltip=pertttext)
+perfeedback=input.bool(false, "show feedback label about lookback")
+look=input.int(21, "user lookback", minval=5, tooltip="when script sets lookback selected script will override user")
+smo=input.int(2, title="smoothing", tooltip="use sma[smo] of depicted value", minval=1, maxval=5)
+
+//input colors
+cpriceup=input.color(color.blue, "price momentum up", group="river item colors")
+cpricedn=input.color(color.rgb(178,40,51,0), "price momentum down", group="river item colors")
+cpushup=input.color(color.new(color.lime,20), "low border (price river upper half)", group="channel item colors")
+cpushdn=input.color(color.new(color.fuchsia,30), "high border (price river lower half)", group="channel item colors")
+cupside=input.color(color.new(color.lime,50), "price river chooses upside of channel", group="channel item colors")
+cdnside=input.color(color.new(color.orange,50), "price river chooses downside of channel", group="channel item colors")
+cstochup=input.color(color.new(color.aqua, 55), "stochastic price river up", group="river item colors")
+cstochdn=input.color(color.rgb(240,64,122, 30), "stochastic price river down", group="river item colors")
+criver=input.color(color.new(color.navy,65), "price river banks and surface", group="river item colors")
+ccont=input.color(color.new(color.gray,50), "channel contracting", group="channel item colors")
+clightup=input.color(color.new(#faec6a, 60), "uptrend highlighter", group="channel item colors")
+clightdn=input.color(color.new(#db9758, 60), "downtrend highlighter", group="channel item colors")
+cinvisable=input.color(color.new(color.gray, 100), "invisble color", group="channel item colors")
+
+//calculate periods by script if perwish == true
+setper= 14                           //initialize setper
+tf=timeframe.period
+setper:= tf=="M"? 14: tf=="W"? 14: tf=="D"? 21: tf=="240"? 28: tf=="180"? 28: tf=="120"? 35: tf=="60"? 35: tf=="45"? 35: tf=="30"? 42: tf=="15"? 42: tf=="5"? 49: tf=="3"? 49: tf=="1"? 56: 10
+look:= perwish? setper : look
+
+//properties of Donchian Channel
+hb=ta.highest(high,look)
+lb=ta.lowest(low,look)
+ran=hb-lb
+ranperc=ran/hb*100      //average range as percent of high border
+
+//function to calculate position of depicted value in Donchian Channel Oscillator
+pos(wrd) =>
+    perc=ran/100
+    calc=(wrd-lb)/perc
+    position=calc>100? 101: calc<0? -1: calc 
+//end of function, it returns position as percent
+
+//values to be plotted or used
+price=pos(ta.sma(close,smo))
+barhi=pos(ta.sma(high,smo))
+barlo=pos(ta.sma(low,smo))
+barmi=pos(ta.sma(hl2,smo))
+barra=barhi-barlo
+avrh=50+ranperc
+avrl=50-ranperc
+
+//situations for choosing colors
+prbarh=price>barmi      //price is higher than middle of bar
+prbarl=price<barmi      //price is lower than middle of bar
+prmidh=price>50         //price is over middle line of channel
+prmidl=price<50         //price is under middle line of channel
+prup=price>=price[1]    //price is rising
+prdn=price<=price[1]    //price is falling
+bwide=barra>barra[1]    //bar range widening
+trup=barhi>76.4         //uptrend called when price is over high fib
+trdn=barlo<23.6         //downtrend called when price is under low fib
+//cwide=ran>ran[1]        //channel widening
+//cont=ran<ran[1]         //channel contracts
+exup=hb>hb[1] and prmidh   //new high in in uptrend
+exdn=lb<lb[1] and prmidl   //new low in downtrend 
+//conup=cont and prmidh   //channel contracts in uptrend
+//condn=cont and prmidl   //channel contracts in downtrend 
+
+//feedback table
+var table userorscript = table.new(position=position.bottom_left, columns=1, rows=1)
+feedbacktext=perwish? "script lookback " +str.tostring(look) : "user lookback " +str.tostring(look)
+if perfeedback == true
+    table.cell(userorscript, row=0, column=0, text=feedbacktext, bgcolor=color.silver)
+else if perfeedback == false
+    table.clear(userorscript, 0, 0, 0, 0)
+
+//plots
+hbor= plot(100, "high border", color=prmidl? cpushdn: cinvisable, linewidth=2)
+hf= plot(76.4, "high fib", color=prmidl?cpushdn: cinvisable, style=plot.style_line, linewidth = 2)
+lf= plot(23.6, "low fib", color= prmidh? cpushup: cinvisable, style=plot.style_line, linewidth = 2)
+lbor= plot(0, "low border", color= prmidh? cpushup: cinvisable, linewidth=2)
+cp= plot(price, "close price", color=prup? cpriceup: cpricedn, linewidth=3)
+bh= plot(barhi, "high river bank", color=criver)
+bl= plot(barlo, "low river bank", color=criver)
+
+//fills
+fill(lbor,lf, color=exup? cpriceup: na, title="channel width wider bc up")
+fill(hbor,hf, color=exdn? cpricedn: na, title="channel width wider bc down")
+fill(cp,bl, color=prup? bwide? cpriceup: prbarh? cstochup: criver: criver, title="volatility stochastic and river up")
+fill(cp,bh, color=prdn? bwide? cpricedn: prbarl? cstochdn: criver: criver, title="volatility stochastic and river down")
+fill(bh,hbor, color=trup? cupside: na, title="in uptrend zone")
+fill(bl,lbor, color=trdn? cdnside: na, title="in downtrend zone")
+fill(bl,lf,color=prmidh?clightup:na, title="uptrend highlighter")       
+fill(bh,hf,color=prmidl?clightdn:na, title="downtrend highlighter") 
+
+plot(102,color=color.black)
+plot(-2,color=color.black)
