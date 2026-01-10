@@ -1,0 +1,21 @@
+//@version=3
+//Dan Pasco
+strategy("Hammer Strategy" , shorttitle="Hammer Strategy $1000", overlay = true , initial_capital = 1000)
+
+//Bullish Hammer Up
+bhu1 = (close-open) > 0 and ((close-open)/3) > (high-close) and ((open-low)/2) > (close-open) and (close-open) > ((open-low)/8)
+plotshape(bhu1 , style = shape.arrowup , location = location.belowbar , text = "Hammer", color = green)
+
+//Bearish Hammer Up
+bhu2 = (open-close) > 0 and ((open-close)/3) > (high-open) and ((close-low)/2) > (open-close) and (open-close) > ((close-low)/8)
+plotshape(bhu2 , style = shape.arrowup , location = location.belowbar , text = "Hammer", color = green)
+
+//Declaring the buy and sell points
+buy = bhu1 == true or bhu2 == true
+profit1 = input(defval = 75, title = "Reward in Pennies", minval = 1)
+loss1 = input(defval = 200, title = "Risk in Pennies", minval = 1)
+
+//Execute historic backtesting
+ordersize = floor(strategy.equity/close) // To dynamically calculate the order size as the account equity increases or decreases.
+strategy.entry("long",strategy.long,ordersize,when=buy) // Buy 
+strategy.exit("Exit Long", from_entry = "long", profit = profit1 , loss = loss1) //Sell
