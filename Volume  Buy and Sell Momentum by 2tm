@@ -1,0 +1,5 @@
+study(title="Volume  Buy and Sell Momentum by 2tm", shorttitle="VBSM")
+EMA_Len = input(25, title="Lenth", minval=1)
+xROC = roc(close, 1)
+
+fill (PNVI, PEMA, pCol)
