@@ -1,0 +1,402 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Amit Namdeo
+//@version=6
+indicator("SMC Buy and Sell Signals (Amit)", shorttitle="SMC Buy and Sell Signals {Amit}", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// --- Inputs ---
+swingSize = input.int(25, "Market Structure Time-Horizon", tooltip='Defines the number of candles used to determine market structure.', group="Inputs")
+bosConfType = input.string('Candle Close', 'BOS Confirmation Type', ['Candle Close', 'Wicks'], tooltip='Confirmation type for BOS.', group="Inputs")
+choch = input.bool(true, 'Show CHoCH', tooltip='Show Change of Character labels.', group="Inputs")
+
+// Risk Management Inputs
+rr_tp1 = input.float(1.0, "TP1 Risk:Reward", step=0.1, tooltip="R:R Multiplier for Target 1", group="Risk Management")
+rr_tp2 = input.float(2.0, "TP2 Risk:Reward", step=0.1, tooltip="R:R Multiplier for Target 2", group="Risk Management")
+rr_tp3 = input.float(3.0, "TP3 Risk:Reward", step=0.1, tooltip="R:R Multiplier for Target 3", group="Risk Management")
+
+// Position Sizing Inputs
+accountSize = input.float(10000, "Account Size ($)", minval=1, group="Position Sizing", tooltip="Total capital in your trading account.")
+riskPerTrade = input.float(1.0, "Risk Per Trade (%)", minval=0.1, maxval=100, step=0.1, group="Position Sizing", tooltip="Percentage of account to risk per trade.")
+
+// Backtesting Date Filter Inputs
+useDateFilter = input.bool(false, "Enable Date Filter", group="Backtesting Date Range", tooltip="If enabled, signals will only appear within the start and end dates.")
+startYear = input.int(2023, "Start Year", minval=1900, group="Backtesting Date Range")
+startMonth = input.int(1, "Start Month", minval=1, maxval=12, group="Backtesting Date Range")
+startDay = input.int(1, "Start Day", minval=1, maxval=31, group="Backtesting Date Range")
+endYear = input.int(2099, "End Year", minval=1900, group="Backtesting Date Range")
+endMonth = input.int(12, "End Month", minval=1, maxval=12, group="Backtesting Date Range")
+endDay = input.int(31, "End Day", minval=1, maxval=31, group="Backtesting Date Range")
+
+// Alert Inputs
+winRateThreshold = input.float(40.0, "Win Rate Alert Threshold (%)", minval=1.0, maxval=100.0, step=1.0, tooltip="Trigger alert if TP1 Win Rate drops below this %.", group="Alerts")
+minTradesAlert = input.int(10, "Min Trades for Rate Alert", minval=1, tooltip="Minimum trades required before monitoring Win Rate drops.", group="Alerts")
+
+// Visualization Inputs
+color BULL = input.color(#00ffbb, "Bullish Color", group="Visualization")
+color BEAR = input.color(#ff1100, "Bearish Color", group="Visualization")
+
+// --- Date Filter Logic ---
+inDateRange = true
+if useDateFilter
+    startTimestamp = timestamp(startYear, startMonth, startDay, 00, 00)
+    endTimestamp = timestamp(endYear, endMonth, endDay, 23, 59)
+    inDateRange := time >= startTimestamp and time <= endTimestamp
+
+bgcolor(useDateFilter and not inDateRange ? color.new(color.gray, 90) : na)
+
+// --- Market Structure Function ---
+MS(int swingSize, int src_BI, string bosConfType, bool enms, float src_close, float src_high, float src_low) =>
+    pivHi = ta.pivothigh(src_high, swingSize, swingSize)
+    pivLo = ta.pivotlow(src_low, swingSize, swingSize)
+    var float prevHigh = na
+    var float prevLow = na
+    var int prevHighIndex = na
+    var int prevLowIndex = na
+    var bool highActive = false
+    var bool lowActive = false
+    bool hh = false
+    bool lh = false
+    bool hl = false
+    bool ll = false
+    var int prevSwing = 0
+    
+    if not na(pivHi) and enms
+        if pivHi >= prevHigh
+            hh := true
+            prevSwing := 2
+        else
+            lh := true
+            prevSwing := 1
+        prevHigh := pivHi
+        highActive := true
+        prevHighIndex := src_BI - swingSize
+        
+    if not na(pivLo) and enms
+        if pivLo >= prevLow
+            hl := true
+            prevSwing := -1
+        else
+            ll := true
+            prevSwing := -2
+        prevLow := pivLo
+        lowActive := true
+        prevLowIndex := src_BI - swingSize
+        
+    bool highBroken = false
+    bool lowBroken = false
+    float highSrc = bosConfType == 'Candle Close' ? src_close : src_high
+    float lowSrc = bosConfType == 'Candle Close' ? src_close : src_low
+    
+    if highSrc > prevHigh and highActive and enms
+        highBroken := true
+        highActive := false
+    if lowSrc < prevLow and lowActive and enms
+        lowBroken := true
+        lowActive := false
+        
+    [hh,ll,lh,hl,highBroken,lowBroken,prevHighIndex,prevLowIndex,pivHi,pivLo,prevHigh,prevLow]
+
+[hh, ll, lh, hl, highBroken, lowBroken, prevHighIndex, prevLowIndex, pivHi, pivLo, prevHigh, prevLow] = MS(swingSize, bar_index, bosConfType, true, close, high, low)
+
+highBroken := highBroken and inDateRange
+lowBroken := lowBroken and inDateRange
+
+var int prevBreakoutDir = 0
+length = 0
+
+// --- Breakout Visualization ---
+if highBroken
+    line.new(prevHighIndex, prevHigh, bar_index, prevHigh, color=BULL, width=1, force_overlay=true)
+    label.new(math.floor(bar_index - (bar_index - prevHighIndex) / 2), prevHigh, prevBreakoutDir == -1 and choch ? 'CHoCH' : 'BOS', color=color.rgb(0, 0, 0, 100), textcolor=BULL, size=size.small, force_overlay=true)
+    alert("Bullish Breakout Detected", alert.freq_once_per_bar)
+    prevBreakoutDir := 1
+    length := bar_index - prevHighIndex
+    
+if lowBroken
+    line.new(prevLowIndex, prevLow, bar_index, prevLow, color=BEAR, width=1, force_overlay=true)
+    label.new(math.floor(bar_index - (bar_index - prevLowIndex) / 2), prevLow, prevBreakoutDir == 1 and choch ? 'CHoCH' : 'BOS', color=color.rgb(0, 0, 0, 100), textcolor=BEAR, style=label.style_label_up, size=size.small, force_overlay=true)
+    alert("Bearish Breakout Detected", alert.freq_once_per_bar)
+    prevBreakoutDir := -1
+    length := bar_index - prevLowIndex
+
+// --- Risk & TP Calculations ---
+x = math.max(1, nz(length))
+v = ta.highest(x) - ta.lowest(x)
+dist = v / 3 
+riskDistance = dist / 3 
+
+var active = 0
+var active1 = 0
+var active2 = 0
+var TP = 0.0
+var TP1 = 0.0
+var TP2 = 0.0
+var SL = 0.0
+
+// Persistent tracking variables
+var bool cur_tp1Hit = false
+var bool cur_tp2Hit = false
+var bool cur_tp3Hit = false
+
+// Arrays for Visualization
+var TPs = array.new_line()
+var TPs1 = array.new_line()
+var TPs2 = array.new_line()
+var SLs = array.new_line()
+var labelTPs = array.new_label() 
+var labelTPs1 = array.new_label()
+var labelTPs2 = array.new_label()
+var labelSLs = array.new_label()
+var labelEntries = array.new_label()
+
+// Arrays for Statistics
+var total = 0
+var tp1s = 0 
+var tp2s = 0 
+var tp3s = 0 
+
+var string[] tradeHistory = array.new_string()
+
+// --- Helper Functions ---
+get_lbl_text(name, val) =>
+    name + ": " + str.tostring(val, format.mintick)
+
+record_trade_result(resultString) =>
+    array.unshift(tradeHistory, resultString)
+    if array.size(tradeHistory) > 10
+        array.pop(tradeHistory)
+
+// --- Signal Trigger & Setup ---
+bool signalTriggered = highBroken or lowBroken
+
+if signalTriggered and active != 0
+    string res = "Reversal"
+    if cur_tp3Hit 
+        res := "TP3 Hit"
+    else if cur_tp2Hit 
+        res := "TP2 Hit"
+    else if cur_tp1Hit 
+        res := "TP1 Hit"
+    record_trade_result(res)
+
+if highBroken
+    active := 1
+    active1 := 1
+    active2 := 1
+    total += 1
+    
+    cur_tp1Hit := false
+    cur_tp2Hit := false
+    cur_tp3Hit := false
+
+    SL := prevHigh - riskDistance
+    TP2 := prevHigh + (riskDistance * rr_tp1) 
+    TP1 := prevHigh + (riskDistance * rr_tp2) 
+    TP := prevHigh + (riskDistance * rr_tp3)  
+    
+    // Position Sizing Calculation
+    riskAmount = accountSize * (riskPerTrade / 100)
+    qty = riskAmount / (prevHigh - SL)
+    
+    TPs.unshift(line.new(prevHighIndex, TP, bar_index, TP, color=color.new(BULL, 70), width=1, force_overlay=true, style=line.style_dashed))
+    TPs1.unshift(line.new(prevHighIndex, TP1, bar_index, TP1, color=color.new(BULL, 50), width=1, force_overlay=true, style=line.style_dashed))
+    TPs2.unshift(line.new(prevHighIndex, TP2, bar_index, TP2, color=color.new(BULL, 30), width=1, force_overlay=true, style=line.style_dashed))
+    SLs.unshift(line.new(prevHighIndex, SL, bar_index, SL, color=color.new(BEAR, 30), width=1, force_overlay=true, style=line.style_solid))
+
+    labelTPs.unshift(label.new(bar_index, TP, get_lbl_text("TP3", TP), color=BULL, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    labelTPs1.unshift(label.new(bar_index, TP1, get_lbl_text("TP2", TP1), color=BULL, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    labelTPs2.unshift(label.new(bar_index, TP2, get_lbl_text("TP1", TP2), color=BULL, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    labelSLs.unshift(label.new(bar_index, SL, get_lbl_text("SL", SL), color=BEAR, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    
+    // Entry Label with Qty
+    entryText = "Entry: " + str.tostring(prevHigh, format.mintick) + "\nQty: " + str.tostring(qty, "#.##")
+    labelEntries.unshift(label.new(bar_index, prevHigh, entryText, color=BULL, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    
+    linefill.new(TPs.first(), TPs1.first(), color.new(BULL, 90))
+
+if lowBroken
+    active := -1
+    active1 := -1
+    active2 := -1
+    total += 1
+    
+    cur_tp1Hit := false
+    cur_tp2Hit := false
+    cur_tp3Hit := false
+
+    SL := prevLow + riskDistance
+    TP2 := prevLow - (riskDistance * rr_tp1) 
+    TP1 := prevLow - (riskDistance * rr_tp2) 
+    TP := prevLow - (riskDistance * rr_tp3)  
+    
+    // Position Sizing Calculation
+    riskAmount = accountSize * (riskPerTrade / 100)
+    qty = riskAmount / (SL - prevLow)
+
+    TPs.unshift(line.new(prevLowIndex, TP, bar_index, TP, color=color.new(BEAR, 70), width=1, force_overlay=true, style=line.style_dashed))
+    TPs1.unshift(line.new(prevLowIndex, TP1, bar_index, TP1, color=color.new(BEAR, 50), width=1, force_overlay=true, style=line.style_dashed))
+    TPs2.unshift(line.new(prevLowIndex, TP2, bar_index, TP2, color=color.new(BEAR, 30), width=1, force_overlay=true, style=line.style_dashed))
+    SLs.unshift(line.new(prevLowIndex, SL, bar_index, SL, color=color.new(BULL, 30), width=1, force_overlay=true, style=line.style_solid))
+
+    labelTPs.unshift(label.new(bar_index, TP, get_lbl_text("TP3", TP), color=BEAR, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    labelTPs1.unshift(label.new(bar_index, TP1, get_lbl_text("TP2", TP1), color=BEAR, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    labelTPs2.unshift(label.new(bar_index, TP2, get_lbl_text("TP1", TP2), color=BEAR, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    labelSLs.unshift(label.new(bar_index, SL, get_lbl_text("SL", SL), color=BULL, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+    
+    // Entry Label with Qty
+    entryText = "Entry: " + str.tostring(prevLow, format.mintick) + "\nQty: " + str.tostring(qty, "#.##")
+    labelEntries.unshift(label.new(bar_index, prevLow, entryText, color=BEAR, textcolor=color.white, style=label.style_label_left, size=size.small, force_overlay=true))
+
+    linefill.new(TPs.first(), TPs1.first(), color.new(BEAR, 90))
+
+// --- Trade Monitoring ---
+bool alert_tp1 = false
+bool alert_tp2 = false
+bool alert_tp3 = false
+bool alert_sl = false
+
+if active == 1 and high >= TP
+    if not cur_tp3Hit
+        tp1s += 1
+        cur_tp3Hit := true
+        alert_tp3 := true
+if active == -1 and low <= TP
+    if not cur_tp3Hit
+        tp1s += 1
+        cur_tp3Hit := true
+        alert_tp3 := true
+
+if active1 != 0 
+    if (active1 == 1 and high >= TP1) or (active1 == -1 and low <= TP1)
+        tp2s += 1
+        cur_tp2Hit := true
+        active1 := 0 
+        alert_tp2 := true
+
+if active2 != 0 
+    if (active2 == 1 and high >= TP2) or (active2 == -1 and low <= TP2)
+        tp3s += 1
+        cur_tp1Hit := true
+        active2 := 0 
+        alert_tp1 := true
+
+bool sl_hit_now = false
+if active == 1 and low <= SL
+    sl_hit_now := true
+if active == -1 and high >= SL
+    sl_hit_now := true
+
+if sl_hit_now
+    alert_sl := true
+    string res = "SL Hit"
+    if cur_tp3Hit 
+        res := "TP3 Hit (Then SL)" 
+    else if cur_tp2Hit 
+        res := "TP2 Hit"
+    else if cur_tp1Hit 
+        res := "TP1 Hit"
+    
+    record_trade_result(res)
+    active := 0 
+
+if (active == 1 and high >= TP) or (active == -1 and low <= TP)
+    if active != 0 
+        record_trade_result("TP3 Hit")
+        active := 0 
+
+// --- Line and Label Management ---
+bool tradeActive = active != 0
+
+if TPs.size() > 0
+    if not tradeActive
+        TPs.remove(math.min(1, TPs.size() - 1))
+        labelTPs.remove(math.min(1, labelTPs.size() - 1))
+    else 
+        TPs.first().set_x2(bar_index)
+        labelTPs.first().set_x(bar_index)
+
+if TPs1.size() > 0
+    if not tradeActive and active1 == 0
+        TPs1.remove(math.min(1, TPs1.size() - 1))
+        labelTPs1.remove(math.min(1, labelTPs1.size() - 1))
+    else 
+        TPs1.first().set_x2(bar_index)
+        labelTPs1.first().set_x(bar_index)
+
+if TPs2.size() > 0
+    if not tradeActive and active2 == 0
+        TPs2.remove(math.min(1, TPs2.size() - 1))
+        labelTPs2.remove(math.min(1, labelTPs2.size() - 1))
+    else 
+        TPs2.first().set_x2(bar_index)
+        labelTPs2.first().set_x(bar_index)
+
+if SLs.size() > 0
+    if not tradeActive
+        SLs.remove(math.min(1, SLs.size() - 1))
+        labelSLs.remove(math.min(1, labelSLs.size() - 1))
+    else 
+        SLs.first().set_x2(bar_index)
+        labelSLs.first().set_x(bar_index)
+
+if labelEntries.size() > 0
+    if not tradeActive
+        labelEntries.remove(math.min(1, labelEntries.size() - 1))
+    else 
+        labelEntries.first().set_x(bar_index)
+
+barcolor(active == 0 ? color.new(color.gray, 40) : active == 1 ? color.new(BULL, 40) : color.new(BEAR, 40))
+
+plotshape(highBroken, "Bullish Signal", shape.labelup, location.belowbar, BULL, size=size.small)
+plotshape(lowBroken, "Bearish Signal", shape.labeldown, location.abovebar, BEAR, size=size.small)
+
+// --- Stats & Win Rate Calculation ---
+t1_rate = total > 0 ? (tp1s / total) * 100.0 : na // TP3 wins
+t2_rate = total > 0 ? (tp2s / total) * 100.0 : na // TP2 wins
+t3_rate = total > 0 ? (tp3s / total) * 100.0 : na // TP1 wins
+
+// --- Win Rate Alert Logic ---
+bool winRateDrop = false
+if total >= minTradesAlert
+    if ta.crossunder(t3_rate, winRateThreshold)
+        winRateDrop := true
+
+// --- Tables ---
+if barstate.islast
+    // 1. Stats Table
+    var table data_table = table.new(position.top_right, 2, 5, chart.bg_color, chart.fg_color, 1, chart.fg_color, 1)
+
+    table.cell(data_table, 0, 0, "Stats", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 1, 0, "Value", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 0, 1, "Signals", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 1, 1, str.tostring(total), text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 0, 2, "TP1 Rate", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 1, 2, total > 0 ? str.format("{0,number,#.##}%", t3_rate) : "-", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 0, 3, "TP2 Rate", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 1, 3, total > 0 ? str.format("{0,number,#.##}%", t2_rate) : "-", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 0, 4, "TP3 Rate", text_size=size.small, text_color=chart.fg_color)
+    table.cell(data_table, 1, 4, total > 0 ? str.format("{0,number,#.##}%", t1_rate) : "-", text_size=size.small, text_color=chart.fg_color)
+
+    // 2. Last 10 Trades Table
+    var table history_table = table.new(position.bottom_right, 2, 11, chart.bg_color, chart.fg_color, 1, chart.fg_color, 1)
+    table.cell(history_table, 0, 0, "Last 10 Trades", text_size=size.small, text_color=chart.fg_color, text_halign=text.align_center)
+    table.merge_cells(history_table, 0, 0, 1, 0) 
+
+    int h_size = array.size(tradeHistory)
+    if h_size > 0
+        for i = 0 to math.min(h_size, 9)
+            string val = array.get(tradeHistory, i)
+            color c = val == "TP3 Hit" ? BULL : val == "SL Hit" ? BEAR : color.gray
+            if val == "TP1 Hit" or val == "TP2 Hit" or str.contains(val, "Then SL")
+                c := color.orange
+                
+            table.cell(history_table, 0, i + 1, "Trade " + str.tostring(i + 1), text_size=size.small, text_color=chart.fg_color)
+            table.cell(history_table, 1, i + 1, val, text_size=size.small, text_color=c, bgcolor=color.new(c, 90))
+
+// --- Alerts ---
+alertcondition(highBroken, "Bullish Signal", "Bullish Breakout Detected")
+alertcondition(lowBroken, "Bearish Signal", "Bearish Breakout Detected")
+alertcondition(alert_tp1, "TP 1 Hit", "Take Profit 1 Reached")
+alertcondition(alert_tp2, "TP 2 Hit", "Take Profit 2 Reached")
+alertcondition(alert_tp3, "TP 3 Hit", "Take Profit 3 Reached")
+alertcondition(alert_sl, "SL Hit", "Stop Loss Reached")
+alertcondition(winRateDrop, "Win Rate Drop", "TP1 Win Rate dropped below critical threshold")
