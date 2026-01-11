@@ -1,0 +1,283 @@
+//@version=6
+indicator("Lakshmi - Low Volatility Range Breakout", "LVRB v1 [Lakshmi]", overlay=true, max_boxes_count=500, max_labels_count=500)
+
+//====================================================
+// Inputs
+//====================================================
+groupLV = "Low Volatility Range"
+lenVol      = input.int(20,   "Volatility Window (SMA)", minval=5, group=groupLV)
+trMult      = input.float(1.00, "TR <= avgTR ×", minval=0.10, step=0.05, group=groupLV)
+bodyMult    = input.float(1.10, "Body <= avgBody ×", minval=0.10, step=0.05, group=groupLV)
+useBody     = input.bool(true,  "Use body filter", group=groupLV)
+
+minBars     = input.int(6, "Min bars in 1 box", minval=2, group=groupLV)
+minGoodFrac = input.float(0.65, "Min low-vol fraction in box", minval=0.0, maxval=1.0, step=0.05, group=groupLV)
+
+// gap capacity
+gapMax      = input.int(5, "Allowed consecutive non-low-vol bars", minval=0, maxval=50, group=groupLV)
+
+// box upper limit
+heightMult  = input.float(1.5, "Max box height = baseATR ×", minval=0.1, step=0.25, group=groupLV)
+
+groupBO = "Breakout"
+breakMode          = input.string("Wick", "Breakout Mode", options=["Wick", "Close"], group=groupBO)
+breakoutBodyMult   = input.float(1.0, "Breakout body multiplier (1.0 = OFF)", minval=1.0, step=0.1, group=groupBO)
+requireCandleColor = input.bool(false, "Require candle direction (green=LONG, red=SHORT)", group=groupBO)
+
+groupVis = "Visuals"
+showBoxes       = input.bool(true, "Show boxes", group=groupVis)
+showSignals     = input.bool(true, "Show breakout signals", group=groupVis)
+showLevels      = input.bool(false, "Show range levels (plots)", group=groupVis)
+
+// delete a box if "OFF"
+keepInvalidated = input.bool(true, "Keep invalidated boxes (neutral)", group=groupVis)
+
+boxTransparency = input.int(85, "Box transparency (0-100)", minval=0, maxval=100, group=groupVis)
+borderWidth     = input.int(1, "Box border width", minval=1, maxval=5, group=groupVis)
+
+colorBull    = input.color(color.lime, "Bull color", group=groupVis)
+colorBear    = input.color(color.red,  "Bear color", group=groupVis)
+colorNeutral = input.color(color.gray, "Neutral color", group=groupVis)
+
+//====================================================
+// Core series
+//====================================================
+float trNow    = ta.tr(true)
+float avgTR    = ta.sma(trNow, lenVol)
+
+float bodyNow  = math.abs(close - open)
+float avgBody  = ta.sma(bodyNow, lenVol)
+
+bool lvTR   = not na(avgTR) and (trNow <= avgTR * trMult)
+bool lvBody = (not useBody) or (not na(avgBody) and (bodyNow <= avgBody * bodyMult))
+bool isLowVol = lvTR and lvBody
+
+int minGoodBars = int(math.ceil(minBars * minGoodFrac))
+
+//====================================================
+// State (persistent)
+//====================================================
+var bool  inSeq      = false
+var bool  qualified  = false
+var int   startIdx   = na
+var int   totalBars  = 0
+var int   goodBars   = 0
+var int   failStreak = 0
+
+var float rngHi      = na
+var float rngLo      = na
+var float baseATR    = na
+var float baseBody0  = na
+
+var box   rngBox     = na
+
+//====================================================
+// Per-bar signals (LIVE + COMMIT)
+//====================================================
+bool bullBreakLive   = false
+bool bearBreakLive   = false
+bool bullBreakCommit = false
+bool bearBreakCommit = false
+
+//====================================================
+// Main logic
+//====================================================
+if not inSeq
+    // start only when we have a low-vol bar (and avgTR exists)
+    if isLowVol and not na(avgTR)
+        inSeq      := true
+        qualified  := false
+        startIdx   := bar_index
+        totalBars  := 1
+        goodBars   := 1
+        failStreak := 0
+        rngHi      := high
+        rngLo      := low
+        baseATR    := avgTR
+        baseBody0  := avgBody
+        rngBox     := na
+else
+    // ====================================================
+    // 1) Breakout check (LIVE: close value projection out of range)
+    //    COMMIT: confirming establishment if a candle ends
+    // ====================================================
+    if qualified and not na(rngHi) and not na(rngLo)
+        bool upWickPierce = (high > rngHi)
+        bool dnWickPierce = (low  < rngLo)
+
+        bool upCloseOut = (close > rngHi)
+        bool dnCloseOut = (close < rngLo)
+
+        bool upCond = breakMode == "Wick" ? (upWickPierce and upCloseOut) : upCloseOut
+        bool dnCond = breakMode == "Wick" ? (dnWickPierce and dnCloseOut) : dnCloseOut
+
+        bool bigOk = breakoutBodyMult <= 1.0 ? true : (not na(baseBody0) and bodyNow >= baseBody0 * breakoutBodyMult)
+        bool dirOkUp = requireCandleColor ? (close > open) : true
+        bool dirOkDn = requireCandleColor ? (close < open) : true
+
+        bullBreakLive := upCond and bigOk and dirOkUp
+        bearBreakLive := dnCond and bigOk and dirOkDn
+
+        bullBreakCommit := barstate.isconfirmed and bullBreakLive
+        bearBreakCommit := barstate.isconfirmed and bearBreakLive
+
+        if bullBreakCommit or bearBreakCommit
+            if showBoxes and not na(rngBox)
+                box.set_right(rngBox, bar_index)
+                color c = bullBreakCommit ? colorBull : colorBear
+                box.set_border_color(rngBox, c)
+                box.set_bgcolor(rngBox, color.new(c, boxTransparency))
+                box.set_border_width(rngBox, borderWidth)
+
+            // reset after CONFIRMED breakout
+            inSeq      := false
+            qualified  := false
+            startIdx   := na
+            totalBars  := 0
+            goodBars   := 0
+            failStreak := 0
+            rngHi      := na
+            rngLo      := na
+            baseATR    := na
+            baseBody0  := na
+            rngBox     := na
+
+    // ====================================================
+    // 2) If still inSeq, extend/update range
+    // ====================================================
+    if inSeq
+        if na(baseATR) or na(avgTR)
+            if showBoxes and not na(rngBox)
+                if keepInvalidated
+                    box.set_right(rngBox, bar_index)
+                    box.set_border_color(rngBox, colorNeutral)
+                    box.set_bgcolor(rngBox, color.new(colorNeutral, boxTransparency))
+                    box.set_border_width(rngBox, borderWidth)
+                else
+                    box.delete(rngBox)
+
+            // reset
+            inSeq      := false
+            qualified  := false
+            startIdx   := na
+            totalBars  := 0
+            goodBars   := 0
+            failStreak := 0
+            rngHi      := na
+            rngLo      := na
+            baseATR    := na
+            baseBody0  := na
+            rngBox     := na
+        else
+            bool outNow = qualified and (close > rngHi or close < rngLo) and not barstate.isconfirmed
+
+            if not outNow
+                // propose next state (do NOT apply yet)
+
+                bool wickOutButReentered = qualified and ((high > rngHi) or (low < rngLo)) and (close <= rngHi) and (close >= rngLo)
+
+                float nextHi = wickOutButReentered ? rngHi : math.max(rngHi, high)
+                float nextLo = wickOutButReentered ? rngLo : math.min(rngLo, low)
+
+                int   nextTotal = totalBars + 1
+                int   nextGood  = goodBars + (isLowVol ? 1 : 0)
+                int   nextFail  = isLowVol ? 0 : (failStreak + 1)
+
+                float nextFrac  = float(nextGood) / float(nextTotal)
+                bool  nextQual  = (nextTotal >= minBars) and (nextGood >= minGoodBars) and (nextFrac >= minGoodFrac)
+
+                bool violates = ((nextHi - nextLo) > baseATR * heightMult) or (nextFail > gapMax)
+
+                if violates
+                    // finalize or delete the current box, then reset
+                    if showBoxes and not na(rngBox)
+                        box.set_right(rngBox, bar_index - 1)
+
+                        if qualified
+                            if keepInvalidated
+                                box.set_border_color(rngBox, colorNeutral)
+                                box.set_bgcolor(rngBox, color.new(colorNeutral, boxTransparency))
+                                box.set_border_width(rngBox, borderWidth)
+                            else
+                                box.delete(rngBox)
+                        else
+                            if not keepInvalidated
+                                box.delete(rngBox)
+                            else
+                                box.set_border_color(rngBox, colorNeutral)
+                                box.set_bgcolor(rngBox, color.new(colorNeutral, boxTransparency))
+                                box.set_border_width(rngBox, borderWidth)
+
+                    // reset
+                    inSeq      := false
+                    qualified  := false
+                    startIdx   := na
+                    totalBars  := 0
+                    goodBars   := 0
+                    failStreak := 0
+                    rngHi      := na
+                    rngLo      := na
+                    baseATR    := na
+                    baseBody0  := na
+                    rngBox     := na
+
+                    // optional: start a new sequence on the same bar
+                    if isLowVol and not na(avgTR)
+                        inSeq      := true
+                        qualified  := false
+                        startIdx   := bar_index
+                        totalBars  := 1
+                        goodBars   := 1
+                        failStreak := 0
+                        rngHi      := high
+                        rngLo      := low
+                        baseATR    := avgTR
+                        baseBody0  := avgBody
+                        rngBox     := na
+                else
+                    // accept update
+                    rngHi      := nextHi
+                    rngLo      := nextLo
+                    totalBars  := nextTotal
+                    goodBars   := nextGood
+                    failStreak := nextFail
+
+                    // become qualified -> create box once
+                    if nextQual and not qualified
+                        qualified := true
+                        if showBoxes
+                            rngBox := box.new(
+                                left=startIdx, top=rngHi, right=bar_index, bottom=rngLo,
+                                xloc=xloc.bar_index,
+                                bgcolor=color.new(colorNeutral, boxTransparency),
+                                border_color=colorNeutral,
+                                border_width=borderWidth
+                            )
+
+                    // update box while qualified
+                    if showBoxes and qualified and not na(rngBox)
+                        box.set_right(rngBox, bar_index)
+                        box.set_top(rngBox, rngHi)
+                        box.set_bottom(rngBox, rngLo)
+                        box.set_border_width(rngBox, borderWidth)
+                        box.set_border_color(rngBox, colorNeutral)
+                        box.set_bgcolor(rngBox, color.new(colorNeutral, boxTransparency))
+
+//====================================================
+// Visuals
+//====================================================
+plotshape(showSignals and bullBreakLive, title="Bull Breakout", style=shape.triangleup, location=location.belowbar,
+     size=size.tiny, color=colorBull, text="LONG", textcolor=colorBull)
+
+plotshape(showSignals and bearBreakLive, title="Bear Breakout", style=shape.triangledown, location=location.abovebar,
+     size=size.tiny, color=colorBear, text="SHORT", textcolor=colorBear)
+
+plot(showLevels and qualified ? rngHi : na, title="Range High", color=color.new(colorBull, 60), linewidth=1)
+plot(showLevels and qualified ? rngLo : na, title="Range Low",  color=color.new(colorBear, 60), linewidth=1)
+
+//====================================================
+// Alerts
+//====================================================
+alertcondition(bullBreakCommit, title="LVRB LONG",  message="LVRB: Bullish breakout (confirmed on close)")
+alertcondition(bearBreakCommit, title="LVRB SHORT", message="LVRB: Bearish breakout (confirmed on close)")
+
