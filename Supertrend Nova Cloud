@@ -1,0 +1,136 @@
+with factor 2 in btc it has some good results 
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Pineify
+
+//======================================================================//
+//                    ____  _            _  __                          //
+//                   |  _ \(_)_ __   ___(_)/ _|_   _                    //
+//                   | |_) | | '_ \ / _ \ | |_| | | |                   //
+//                   |  __/| | | | |  __/ |  _| |_| |                   //
+//                   |_|   |_|_| |_|\___|_|_|  \__, |                   //
+//                                             |___/                    //
+//======================================================================//
+
+
+//@version=6
+indicator("Supertrend Nova Cloud [Pineify]", shorttitle="Supertrend Nova Cloud", overlay=true, max_lines_count=500, max_boxes_count=500)
+
+//---------------------------------------------------------------------------------------------------------------------}
+// SETTINGS
+//---------------------------------------------------------------------------------------------------------------------{
+
+// Groups
+grp_fast = "Nova (Fast Trend)"
+grp_slow = "Nebula (Slow Trend)"
+grp_style = "Visuals"
+
+// Fast Settings
+fastLen = input.int(10, "ATR Length", group=grp_fast)
+fastFac = input.float(2.0, "Factor", step=0.1, group=grp_fast)
+
+// Slow Settings
+slowLen = input.int(20, "ATR Length", group=grp_slow)
+slowFac = input.float(4.0, "Factor", step=0.1, group=grp_slow)
+
+// Styling
+showDash = input.bool(true, "Show Dashboard", group=grp_style)
+useCandleColor = input.bool(true, "Color Candles", group=grp_style)
+
+// Colors
+colorUp   = input.color(#089981, "Bullish Color", group=grp_style)
+colorDn   = input.color(#F23645, "Bearish Color", group=grp_style)
+colorNeut = input.color(color.gray, "Neutral/Mixed", group=grp_style)
+
+//---------------------------------------------------------------------------------------------------------------------}
+// CALCULATIONS
+//---------------------------------------------------------------------------------------------------------------------{
+
+// Supertrend Calculation Function
+// We use the built-in ta.supertrend but wrapping it for clarity in logic flow
+[stFast, dirFast] = ta.supertrend(fastFac, fastLen)
+[stSlow, dirSlow] = ta.supertrend(slowFac, slowLen)
+
+// Trend Consensus Logic
+// -1 is Up (in Pine's ta.supertrend), 1 is Down
+isStrongBull = dirFast == -1 and dirSlow == -1
+isStrongBear = dirFast == 1 and dirSlow == 1
+isMixed      = dirFast != dirSlow
+
+// Cloud Gradient Logic
+// Calculate the delta between the two supertrends to determine "Glow" intensity
+trendDelta = math.abs(stFast - stSlow)
+maxDelta   = ta.highest(trendDelta, 50)
+glowAlpha  = math.min(100, math.max(20, int((trendDelta / maxDelta) * 100)))
+
+// Determine Fill Colors
+fillColorUp = color.new(colorUp, 100 - glowAlpha)
+fillColorDn = color.new(colorDn, 100 - glowAlpha)
+fillColorMix = color.new(colorNeut, 80)
+
+finalFill = isStrongBull ? fillColorUp : isStrongBear ? fillColorDn : fillColorMix
+
+//---------------------------------------------------------------------------------------------------------------------}
+// VISUALS
+//---------------------------------------------------------------------------------------------------------------------{
+
+// Plotting Lines
+// Nova Line (Fast Trend) - Thinner line
+p1 = plot(stFast, "Nova Line", color = dirFast == -1 ? color.new(colorUp, 0) : color.new(colorDn, 0), linewidth=1)
+
+// Nebula Line (Slow Trend) - Thicker line
+p2 = plot(stSlow, "Nebula Line", color = dirSlow == -1 ? color.new(colorUp, 50) : color.new(colorDn, 50), linewidth=2)
+
+// The Cloud Fill - Dynamic gradient between the two supertrends
+fill(p1, p2, finalFill, "Nova Cloud")
+
+// Candle Coloring
+barColor = if useCandleColor
+    if isStrongBull
+        colorUp
+    else if isStrongBear
+        colorDn
+    else if dirFast == -1 and dirSlow == 1
+        // Fast Bull, Slow Bear (Pullback Recovery)
+        color.new(colorUp, 50)
+    else
+        // Fast Bear, Slow Bull (Pullback)
+        color.new(colorDn, 50)
+else
+    na
+
+barcolor(barColor)
+
+// Trend Change Signals
+// Only firing signals when the SLOW trend (Nebula) flips for higher quality signals
+plotshape(ta.change(dirSlow) < 0, "Bullish Reversal", shape.labelup, location.belowbar, colorUp, 0, "NOVA\nBUY", color.white, size=size.tiny)
+plotshape(ta.change(dirSlow) > 0, "Bearish Reversal", shape.labeldown, location.abovebar, colorDn, 0, "NOVA\nSELL", color.white, size=size.tiny)
+
+//---------------------------------------------------------------------------------------------------------------------}
+// DASHBOARD
+//---------------------------------------------------------------------------------------------------------------------{
+
+var table dash = table.new(position.top_right, 2, 3, bgcolor = #1e222d, border_width=1, frame_color=#373a46, border_color=#373a46)
+
+if showDash and barstate.islast
+    // Header Row
+    table.cell(dash, 0, 0, "Trend", text_color=color.white, text_size=size.small, bgcolor=#373a46)
+    table.cell(dash, 1, 0, "State", text_color=color.white, text_size=size.small, bgcolor=#373a46)
+    
+    // Nova (Fast) Row
+    table.cell(dash, 0, 1, "Nova (Fast)", text_color=color.silver, text_size=size.small)
+    table.cell(dash, 1, 1, dirFast == -1 ? "Bullish" : "Bearish", text_color = dirFast == -1 ? colorUp : colorDn, text_size=size.small, bgcolor = dirFast == -1 ? color.new(colorUp, 90) : color.new(colorDn, 90))
+
+    // Nebula (Slow) Row
+    table.cell(dash, 0, 2, "Nebula (Slow)", text_color=color.silver, text_size=size.small)
+    table.cell(dash, 1, 2, dirSlow == -1 ? "Bullish" : "Bearish", text_color = dirSlow == -1 ? colorUp : colorDn, text_size=size.small, bgcolor = dirSlow == -1 ? color.new(colorUp, 90) : color.new(colorDn, 90))
+
+//---------------------------------------------------------------------------------------------------------------------}
+// ALERTS
+//---------------------------------------------------------------------------------------------------------------------{
+
+// Alert conditions for trend reversals based on the slow (Nebula) trend
+alertcondition(ta.change(dirSlow) < 0, "Nova Bullish Trend", "Market has entered a strong uptrend - Nova Cloud indicating bullish reversal")
+alertcondition(ta.change(dirSlow) > 0, "Nova Bearish Trend", "Market has entered a strong downtrend - Nova Cloud indicating bearish reversal")
+
+// Additional alert for mixed conditions (consolidation)
+alertcondition(isMixed and not (isStrongBull or isStrongBear), "Nova Cloud Consolidation", "Fast and Slow trends are diverging - market may be consolidating or determining direction")
