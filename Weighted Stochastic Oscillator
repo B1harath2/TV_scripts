@@ -1,0 +1,205 @@
+//@version=6
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © SeerQuant
+
+import TradingView/ta/9 as ta
+
+indicator(
+     title      = "Weighted Stochastic Oscillator [SeerQuant]",
+     shorttitle = "𝐖𝐒𝐓𝐎 [SeerQuant]",
+     overlay    = false
+)
+
+// ----------------- ＳＴＡＴＩＣ ＶＡＲＩＡＢＬＥＳ ----------------- //
+
+// 🇸🇹🇷🇮🇳🇬🇸
+const string g1 = "Calculation Settings"
+const string g2 = "Style Settings"
+
+//🇫🇱🇴🇦🇹🇸
+float mid_line = 50.0
+
+// ----------------- ＩＮＰＵＴ ＶＡＲＩＡＢＬＥＳ ----------------- //
+
+// 🇸🇹🇷🇮🇳🇬🇸
+string colScheme = input.string(
+     defval  = "Default",
+     title   = "Colour Choice",
+     options = ["Default", "Modern", "Cool", "Monochrome"],
+     group   = g2
+)
+
+string maType = input.string(
+     defval  = "RMA",
+     title   = "Moving Average Type",
+     options = ["SMA", "EMA", "SMMA", "WMA", "VWMA", "LSMA", "HMA", "ALMA", "RMA", "DEMA", "TEMA"],
+     group   = g1
+)
+
+string weightType = input.string(
+     defval  = "Volatility",
+     title   = "Stoch Weighting Method",
+     options = ["Volume", "Momentum", "Volatility", "Reversion Factor"],
+     group   = g1
+)
+
+string srcMode = input.string(
+     defval  = "Close",
+     title   = "Stoch Source Mode",
+     options = ["Close", "HLC3", "OHLC4", "Input Source"],
+     group   = g1
+)
+
+string colcMode = input.string(
+     defval  = "%K",
+     title   = "Candle Color Mode",
+     options = ["%K", "%D"],
+     group   = g2
+)
+
+//🇫🇱🇴🇦🇹🇸
+float source = input.source(defval = close, title = "Input Source", group = g1)
+
+//🇮🇳🇹🇸
+int length      = input.int(defval = 14, title = "Stochastic Length", group = g1)
+int smoothKLen  = input.int(defval = 3,  title = "Smooth %K Length",  group = g1)
+int smoothDLen  = input.int(defval = 3,  title = "Smooth %D Length",  group = g1)
+int neutralZone = input.int(defval = 5,  title = "Neutral Zone Range", group = g1)
+
+//🇧🇴🇴🇱🇸
+bool colc = input.bool(defval = false, title = "Color Candles?",     group = g2)
+bool cust = input.bool(defval = false, title = "Use Custom Colors?", group = g2)
+
+//🇨🇴🇱🇴🇷🇸
+color bullc    = input.color(defval = #00ff00, title = "Bull Colour",    group = g2)
+color bearc    = input.color(defval = #ff0000, title = "Bear Colour",    group = g2)
+color neutralc = input.color(defval = #6c6c6c, title = "Neutral Colour", group = g2)
+
+[bulld, beard] = switch colScheme
+    "Default"    => [#00ff00, #ff0000]
+    "Modern"     => [#23d7e4, #e11179]
+    "Cool"       => [#00ffcc, #4e4f75]
+    "Monochrome" => [#ffffff, #4e4e4e]
+
+[bull, bear] = switch cust
+    false => [bulld, beard]
+    true  => [bullc, bearc]
+
+// ----------------- ＦＵＮＣＴＩＯＮＳ ----------------- //
+
+f_clamp(x, lo, hi) =>
+    math.min(math.max(x, lo), hi)
+
+ma(src, len, type) =>
+    int _len = math.max(len, 1)
+    switch type
+        "SMA"  => ta.sma(src, _len)
+        "EMA"  => ta.ema(src, _len)
+        "SMMA" => ta.rma(src, _len)
+        "WMA"  => ta.wma(src, _len)
+        "VWMA" => ta.vwma(src, _len)
+        "LSMA" => ta.linreg(src, _len, 0)
+        "ALMA" => ta.alma(src, _len, 0.85, 6)
+        "RMA"  => ta.rma(src, _len)
+        "HMA"  =>
+            int half = math.max(1, int(math.round(_len / 2.0)))
+            int root = math.max(1, int(math.floor(math.sqrt(_len))))
+            ta.wma(2.0 * ta.wma(src, half) - ta.wma(src, _len), root)
+        "DEMA" =>
+            float ema1 = ta.ema(src, _len)
+            float ema2 = ta.ema(ema1, _len)
+            2.0 * ema1 - ema2
+        "TEMA" =>
+            float ema1 = ta.ema(src, _len)
+            float ema2 = ta.ema(ema1, _len)
+            float ema3 = ta.ema(ema2, _len)
+            3.0 * (ema1 - ema2) + ema3
+
+// ----------------- ＣＡＬＣＵＬＡＴＩＯＮＳ ----------------- //
+
+// Source selector
+src = switch srcMode
+    "Close"        => close
+    "HLC3"         => hlc3
+    "OHLC4"        => ohlc4
+    "Input Source" => source
+
+// Weight
+wRaw = switch weightType
+    "Volume"           => volume
+    "Momentum"         => math.abs(ta.mom(src, length))
+    "Volatility"       => ta.stdev(src, length)
+    "Reversion Factor" => 1.0 / (1.0 + ta.variance(src, length))
+
+// Normalize weight for stability
+wBase = ta.rma(wRaw, length)
+wNorm = wBase != 0.0 ? (wRaw / wBase) : 1.0
+wNorm := f_clamp(wNorm, 0.25, 4.0)
+
+// Raw stochastic
+lo   = ta.lowest(src, length)
+hi   = ta.highest(src, length)
+den  = hi - lo
+kRaw = den != 0.0 ? 100.0 * (src - lo) / den : mid_line
+
+// Weighted stochastic: amplify distance from 50 by wNorm, then clamp to [0,100]
+kW = f_clamp(mid_line + (kRaw - mid_line) * wNorm, 0.0, 100.0)
+
+// Smooth lines
+k = ma(kW, smoothKLen, maType)
+d = ma(k,  smoothDLen, maType)
+
+// Neutral zone boundaries (around 50)
+neutral_low  = mid_line - neutralZone
+neutral_high = mid_line + neutralZone
+
+// ----------------- ＰＬＯＴＴＩＮＧ ----------------- //
+
+// Mid line only (removed 80/20 + OB/OS visuals)
+mid = plot(mid_line, color = color.new(chart.fg_color, 55))
+
+// Main oscillator (%K weighted + smoothed)
+p = plot(
+     k,
+     color     = color.new(k > neutral_high ? bull : k < neutral_low ? bear : neutralc, 0),
+     linewidth = 1
+)
+
+// Signal line (%D)
+plot(d, color = color.gray, linewidth = 1)
+
+// Fill vs midline (directional tint)
+fill(p, mid, color = k > neutral_high ? color.new(bull, 90) : (k < neutral_low ? color.new(bear, 90) : color.new(neutralc, 90)))
+fill(p, mid, k, mid_line, color.new(chart.bg_color, 100), k > neutral_high ? bull : (k < neutral_low ? bear : neutralc))
+
+// Candle coloring (optional)
+selected = colcMode == "%K" ? k : d
+col      = selected > neutral_high ? bull : selected < neutral_low ? bear : neutralc
+
+plotcandle(
+     open, high, low, close,
+     color         = colc ? col : na,
+     wickcolor     = colc ? col : na,
+     bordercolor   = colc ? col : na,
+     force_overlay = true
+)
+
+// Alerts
+alertcondition(selected > mid_line, title = "WSTO Positive Trend", message = "WSTO Bullish Signal on: {{exchange}}:{{ticker}}")
+alertcondition(selected < mid_line, title = "WSTO Negative Trend", message = "WSTO Bearish Signal on: {{exchange}}:{{ticker}}")
+
+// ---------------------------------------------------------------------------------------------------------------- //
+// -------------------------------------------- ＣＲＥＡＴＥＤ ＢＹ ------------------------------------------------- //
+// ---------------------------------------------------------------------------------------------------------------- //
+//                                                                                                                  //
+//   ▄████████    ▄████████    ▄████████    ▄████████ ████████▄   ███    █▄     ▄████████ ███▄▄▄▄       ███         //
+//   ███    ███   ███    ███   ███    ███   ███    ███ ███    ███  ███    ███   ███    ███ ███▀▀▀██▄ ▀█████████▄    //
+//    ███    █▀    ███    █▀    ███    █▀    ███    ███ ███    ███  ███    ███   ███    ███ ███   ███    ▀███▀▀██   //
+//    ███         ▄███▄▄▄      ▄███▄▄▄      ▄███▄▄▄▄██▀ ███    ███  ███    ███   ███    ███ ███   ███     ███   ▀   //
+//  ▀███████████ ▀▀███▀▀▀     ▀▀███▀▀▀     ▀▀███▀▀▀▀▀   ███    ███  ███    ███ ▀███████████ ███   ███     ███       //
+//           ███   ███    █▄    ███    █▄  ▀███████████ ███    ███  ███    ███   ███    ███ ███   ███     ███       //
+//     ▄█    ███   ███    ███   ███    ███   ███    ███ ███  ▀ ███  ███    ███   ███    ███ ███   ███     ███       //
+//   ▄████████▀    ██████████   ██████████   ███    ███  ▀██████▀▄█ ████████▀    ███    █▀   ▀█   █▀     ▄████▀     //
+//                                                                                                                  //
+// ---------------------------------------------------------------------------------------------------------------- //
+
