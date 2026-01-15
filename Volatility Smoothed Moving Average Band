@@ -1,0 +1,181 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © MisinkoMaster
+
+//@version=6
+indicator("Volatility Smoothed Moving Average Band", "VSMA Bands | MisinkoMaster", overlay = true,
+     behind_chart = false)
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//Import Libraries
+import TradingView/ta/11
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//Get User Defined Inputs
+length = input.int(40, "Length", step = 1, minval = 2,
+     tooltip = "Changes the length of the Moving Averages",
+     group = "Divergence Smoothed Moving Average Bands | MisinkoMaster")
+source = input.source(hlc3, "Source",
+     tooltip = "Changes the source of the Moving Averages",
+     group = "Divergence Smoothed Moving Average Bands | MisinkoMaster")
+multiplier_up = input.float(2.8, "Upper Multiplier", step = 0.05, minval = 0.05,
+     tooltip = "Multiplier the Upper Band",
+     group = "Divergence Smoothed Moving Average Bands | MisinkoMaster")
+multiplier_down = input.float(2.25, "Lower Multiplier", step = 0.05, minval = 0.05,
+     tooltip = "Multiplier the Lower Band",
+     group = "Divergence Smoothed Moving Average Bands | MisinkoMaster")
+smooth = input.string("None", "Smoothing",
+     options = ["None", "Exponential", "Moving Average", "Both"],
+     group = "Extra Settings")
+slow_ma = input.string("SMA", "Slow Moving Average Type",
+     options = ["SMA", "RMA", "EMA", "Median"],
+     group = "Extra Settings")
+fast_ma = input.string("WMA", "Fast Moving Average Type",
+     options = ["EMA", "WMA", "DEMA", "TEMA", "HMA"],
+     group = "Extra Settings")
+avg_type = input.string(defval = "Equal", title = "Center Type",
+     options = ["Weighted", "MA Weighted", "Smooth Weighted", "Equal", "Barely Weighted",
+     "Inversly Weighted"],
+     tooltip = "Changes the type of averaging for the calculation of the center.",
+     group = "Extra Settings")
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//Calculations
+sqrt = math.abs(math.round(math.sqrt(length)))
+sma = switch slow_ma
+    "SMA" => ta.sma(source, length)
+    "RMA" => ta.rma(source, length)
+    "EMA" => ta.ema(source, length)
+    "Median" => ta.median(source, length)
+
+fma = switch fast_ma
+    "EMA" => ta.ema(source, length)
+    "WMA" => ta.wma(source, length)
+    "DEMA" => ta.dema(source, length)
+    "TEMA" => ta.tema(source, length)
+    "HMA" => ta.hma(source, length)
+
+
+x0 = (fma + fma*2-sma)/2
+x1 = (fma + x0)/2
+x2 = (x0+x1)/2
+x3 = (x1+x2)/2
+x4 = (x2+x3)/2
+
+avg_val = switch avg_type
+    "Weighted" => (fma*7+sma*6+x0*5+x1*4+x2*3+x3*2+x4)/28
+    "MA Weighted" => (fma*2+sma*2+x0+x1+x2+x3+x4)/9
+    "Smooth Weighted" => (fma+sma+x0*2+x1*2+x2*2+x3*2+x4*2)/12
+    "Equal" => (fma+sma+x0+x1+x2+x3+x4)/7
+    "Barely Weighted" => (fma*2+sma+x0+x1+x2+x3+x4)/8.5
+    "Inversly Weighted" => (fma+sma*2+x0*3+x1*4+x2*5+x3*6+x4*7)/28
+smooth_val = switch fast_ma
+    "EMA" => ta.ema(avg_val, sqrt)
+    "WMA" => ta.wma(avg_val, sqrt)
+    "DEMA" => ta.dema(avg_val, sqrt)
+    "TEMA" => ta.tema(avg_val, sqrt)
+    "HMA" => ta.hma(avg_val, sqrt)
+
+a = 2/(1+sqrt)
+ma = switch smooth
+    "None" => avg_val
+    "Moving Average" => smooth_val
+    "Exponential" => avg_val[1]*(1-a)+avg_val*a
+    "Both" => smooth_val[1]*(1-a)+smooth_val*a
+s1 = source - fma
+s2 = source - sma
+s3 = source - x0
+s4 = source - x1
+s5 = source - x2
+s6 = source - x3
+s7 = source - x4
+
+df1 = fma - sma
+df2 = fma - x0
+df3 = fma - x1
+df4 = fma - x2
+df5 = fma - x3
+df6 = fma - x4
+
+ds1 = sma - x0
+ds2 = sma - x1
+ds3 = sma - x2
+ds4 = sma - x3
+ds5 = sma - x4
+
+dx01 = x0 - x1
+dx02 = x0 - x2
+dx03 = x0 - x3
+dx04 = x0 - x4
+
+dx11 = x1 - x2
+dx12 = x1 - x3
+dx13 = x1 - x4
+
+dx21 = x2 - x3
+dx22 = x2 - x4
+
+dx31 = x3 - x4
+
+v1 = math.avg(s1, s2, s3, s4, s5, s6, s7, df1, df2, df3, df4, df5, df6, ds1, ds2,
+      ds3, ds4, ds5, dx01, dx02, dx03,
+      dx04, dx11, dx12, dx13, dx21, dx22, dx31)
+v2 = switch fast_ma
+    "EMA" => ta.ema(ta.ema(v1, sqrt), sqrt)
+    "WMA" => ta.wma(ta.wma(v1, sqrt), sqrt)
+    "DEMA" => ta.dema(ta.dema(v1, sqrt), sqrt)
+    "TEMA" => ta.tema(ta.tema(v1, sqrt), sqrt)
+    "HMA" => ta.hma(ta.hma(v1, sqrt), sqrt)
+v3 = v1[1]*(1-a) + v1*(a)
+v4 = v2[1]*(1-a) + v2*(a)
+v = switch smooth
+    "None" => v1
+    "Exponential" => v3
+    "Moving Average" => v2
+    "Both" => v4
+Upper = ma + math.abs(v)*multiplier_up
+Lower = ma - math.abs(v)*multiplier_down
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//Trend Logic
+var trend = 0
+
+L = ta.crossover(source, Upper)
+S = ta.crossunder(source, Lower)
+
+if L and not S
+    trend := 1
+if S
+    trend := -1
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//Plotting
+style = input.string(defval = "Dragonic", title = "Plotting Style",
+     options = ["Dragonic", "Medieval", "Modern", "Retro", "Futuristic", "Tropical", "OG"],
+     group = "Style Settings")
+
+[bullcol, bearcol, bullcolT, bearcolT] = switch style
+    "Dragonic" => [color.rgb(0, 255, 155, 11), color.rgb(255, 0, 155, 10),
+     color.rgb(0, 255, 155, 60), color.rgb(255, 0, 155, 60)]
+    "Medieval" => [color.rgb(200, 255, 255, 10), color.rgb(24, 2, 3, 10),
+     color.rgb(200, 255, 255, 60), color.rgb(24, 2, 3, 60)]
+    "Modern" => [color.rgb(0, 255, 255, 10),color.rgb(255, 0, 255, 10),
+     color.rgb(0, 255, 255, 60),color.rgb(255, 0, 255, 60)]
+    "Retro" => [color.rgb(103, 194, 203),color.rgb(212, 175, 55),
+     color.rgb(103, 194, 203, 60),color.rgb(212, 175, 55, 60)]
+    "Futuristic" => [color.rgb(16, 255, 215),color.rgb(255, 72, 72), 
+     color.rgb(16, 255, 215, 60), color.rgb(255, 72, 72, 60)]
+    "Tropical" => [color.rgb(251, 255, 14),color.rgb(243, 142, 11),
+     color.rgb(251, 255, 14, 45),color.rgb(243, 142, 11, 45)]
+    "OG" => [color.rgb(0, 255, 0),color.rgb(255, 0, 0),
+     color.rgb(0, 255, 0, 60),color.rgb(255, 0, 0, 60)]
+
+col = color.rgb(70, 68, 68)
+colT = color.rgb(70, 68, 68, 60)
+
+if trend == 1
+    col := bullcol
+    colT := bullcolT
+if trend == -1
+    col := bearcol
+    colT := bearcolT
+
+u = plot(Upper, "Upper Band", col, 3)
+l = plot(Lower, "Lower Band", col, 3)
+m = plot(ma, "Moving Average", col, 3)
+fill(u, l, colT)
+plotcandle(open, high, low, close, bordercolor = col, color = col, wickcolor = col, display = display.pane)
