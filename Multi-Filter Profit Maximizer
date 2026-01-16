@@ -1,0 +1,128 @@
+//@version=5
+indicator("Multi-Filter Profit Maximizer (CCI Ver)", overlay=true)
+
+// ------------------------------------------------------------
+// 1. Settings
+// ------------------------------------------------------------
+grp_main    = "Trend Strategy (SuperTrend)"
+atr_len     = input.int(10, "ATR Length", group=grp_main)
+factor      = input.float(1.5, "Factor (日経225推奨: 1.5)", step=0.1, group=grp_main)
+
+grp_filter  = "Filters (ADX & EMA)"
+adx_len     = input.int(14, "ADX Length", group=grp_filter)
+adx_thresh  = input.int(20, "ADX Threshold", group=grp_filter)
+use_ema     = input.bool(true, "Filter with EMA 200?", group=grp_filter)
+
+grp_trigger = "Entry Trigger (CCI)"
+cci_len     = input.int(3, "CCI Length (短期推奨: 3)", group=grp_trigger)
+cci_ob      = input.int(100, "CCI Overbought (+100)", group=grp_trigger)
+cci_os      = input.int(-100, "CCI Oversold (-100)", group=grp_trigger)
+
+grp_vol     = "Volume Confirmation (CVD)"
+cvd_len     = input.int(20, "CVD Lookback", group=grp_vol)
+
+// ------------------------------------------------------------
+// 2. Logic (Trend, Volatility, Momentum)
+// ------------------------------------------------------------
+[supertrend, direction] = ta.supertrend(factor, atr_len)
+
+// トレンド転換の検知
+trend_flipped_up   = direction < 0 and direction[1] >= 0
+trend_flipped_down = direction > 0 and direction[1] <= 0
+
+// EMA 200 の計算
+ema200 = ta.ema(close, 200)
+trend_ok_long  = use_ema ? close > ema200 : true
+trend_ok_short = use_ema ? close < ema200 : true
+
+// ADX の計算
+[di_plus, di_minus, adx] = ta.dmi(adx_len, adx_len)
+is_trend_active = adx > adx_thresh
+
+// CCI の計算
+cci_val = ta.cci(close, cci_len)
+
+// 買い条件: CCIが -100 を下回った状態から上に抜けた時
+cci_long_signal  = ta.crossover(cci_val, cci_os)
+
+// 売り条件: CCIが +100 を上回った状態から下に抜けた時
+cci_short_signal = ta.crossunder(cci_val, cci_ob)
+
+// CVD (出来高) の計算
+cvd_delta = (high == low) ? 0 : volume * (close - open) / (high - low)
+cvd_cum   = math.sum(cvd_delta, cvd_len)
+cvd_long  = cvd_cum > cvd_cum[1]
+cvd_short = cvd_cum < cvd_cum[1]
+
+// 基本のエントリー条件 (CCIを使用)
+raw_long_entry  = (direction < 0) and trend_ok_long and is_trend_active and cvd_long and cci_long_signal
+raw_short_entry = (direction > 0) and trend_ok_short and is_trend_active and cvd_short and cci_short_signal
+
+// ------------------------------------------------------------
+// 3. Single Signal Logic (トレンド内で1回のみ)
+// ------------------------------------------------------------
+var bool long_fired = false
+var bool short_fired = false
+
+// トレンドが切り替わったらフラグをリセット
+if trend_flipped_up or trend_flipped_down
+    long_fired := false
+    short_fired := false
+
+// まだサインが出ていない場合のみ、新しくサインを出す
+final_long_entry  = raw_long_entry and not long_fired
+final_short_entry = raw_short_entry and not short_fired
+
+// サインが出たらフラグを立てる
+if final_long_entry
+    long_fired := true
+if final_short_entry
+    short_fired := true
+
+// ------------------------------------------------------------
+// 4. Visuals (表示設定)
+// ------------------------------------------------------------
+// EMA 200
+plot(use_ema ? ema200 : na, "EMA 200", color=color.new(color.orange, 50), linewidth=2, title="EMA 200 Line")
+
+// SuperTrend Line
+plot(direction < 0 ? supertrend : na, "Support", color=#00e676, linewidth=3, style=plot.style_linebr)
+plot(direction > 0 ? supertrend : na, "Resistance", color=#ff1744, linewidth=3, style=plot.style_linebr)
+
+// トレンド転換ドット
+plotshape(trend_flipped_up ? supertrend : na, style=shape.circle, location=location.absolute, color=#00e676, size=size.tiny)
+plotshape(trend_flipped_down ? supertrend : na, style=shape.circle, location=location.absolute, color=#ff1744, size=size.tiny)
+
+// エントリーサイン
+plotshape(final_long_entry, title="BUY", style=shape.labelup, location=location.belowbar, color=#00e676, text="BUY", textcolor=color.black, size=size.normal)
+plotshape(final_short_entry, title="SELL", style=shape.labeldown, location=location.abovebar, color=#ff1744, text="SELL", textcolor=color.white, size=size.normal)
+
+// 背景ハイライト
+bgcolor(final_long_entry ? color.new(color.green, 80) : na)
+bgcolor(final_short_entry ? color.new(color.red, 80) : na)
+
+// ローソク足の色
+barcolor(direction < 0 ? (adx > adx_thresh ? #00e676 : #b2dfdb) : (adx > adx_thresh ? #ff1744 : #ffcdd2))
+
+// ダッシュボード
+var table panel = table.new(position.top_right, 3, 2, border_width=1)
+
+if barstate.islast
+    table.cell(panel, 0, 0, "ADX Trend", bgcolor=color.black, text_color=color.white, text_size=size.normal)
+    table.cell(panel, 1, 0, str.tostring(adx, "0.0"), bgcolor=color.black, text_color=adx > adx_thresh ? color.yellow : color.gray, text_size=size.normal)
+    table.cell(panel, 2, 0, "          ", bgcolor=color.new(color.black, 100))
+
+// ------------------------------------------------------------
+// 5. Alerts (アラート設定)
+// ------------------------------------------------------------
+// BUY サインのアラート
+alertcondition(final_long_entry, title="BUY Signal", message="BUY Signal Detected (CCI Entry)")
+
+// SELL サインのアラート
+alertcondition(final_short_entry, title="SELL Signal", message="SELL Signal Detected (CCI Entry)")
+
+// トレンド転換（上昇）のアラート
+alertcondition(trend_flipped_up, title="Trend Change UP", message="SuperTrend Changed to UP")
+
+// トレンド転換（下降）のアラート
+alertcondition(trend_flipped_down, title="Trend Change DOWN", message="SuperTrend Changed to DOWN")
