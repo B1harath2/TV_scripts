@@ -1,0 +1,115 @@
+//@version=6
+strategy("Supertrend + RSI Positional Strategy", overlay=true,
+     initial_capital=100000,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     pyramiding=0,
+     calc_on_every_tick=false)
+
+// ================= SUPERNDREND =================
+stAtrLen = input.int(10, "Supertrend ATR Length")
+stMult   = input.float(3.0, "Supertrend Factor")
+plotST   = input.bool(true, "Plot Supertrend")
+stUpCol  = input.color(color.green, "Supertrend Bullish Color")
+stDnCol  = input.color(color.red, "Supertrend Bearish Color")
+
+[stLine, stDir] = ta.supertrend(stMult, stAtrLen)
+stBull = stDir < 0
+stBear = not stBull
+
+// ================= RSI =================
+rsiLen = input.int(14, "RSI Length")
+rsiThr = input.float(50.0, "RSI Bullish Threshold")
+rsiVal = ta.rsi(close, rsiLen)
+
+// ================= ADX (OPTIONAL FILTER) =================
+useADX = input.bool(false, "Enable ADX Filter for Entry")
+adxLen = input.int(14, "ADX Length")
+adxThr = input.float(20.0, "ADX Threshold")
+[_, _, adxVal] = ta.dmi(adxLen, adxLen)
+
+// ================= EXIT MODE =================
+exitMode = input.string("Supertrend OR RSI", "Exit Condition",
+     options=["Supertrend OR RSI", "Supertrend ONLY", "RSI ONLY", "Supertrend AND RSI"])
+
+// ================= MANUAL TRADE STATE =================
+var bool inTrade = false
+
+// ================= ENTRY CONDITION =================
+adxOk  = useADX ? adxVal > adxThr : true
+enter  = barstate.isconfirmed and not inTrade and stBull and rsiVal > rsiThr and adxOk
+
+// ================= EXIT CONDITION =================
+exitST  = stBear
+exitRSI = rsiVal < rsiThr
+
+exitCond = false
+if exitMode == "Supertrend OR RSI"
+    exitCond := exitST or exitRSI
+else if exitMode == "Supertrend ONLY"
+    exitCond := exitST
+else if exitMode == "RSI ONLY"
+    exitCond := exitRSI
+else
+    exitCond := exitST and exitRSI
+
+exit = barstate.isconfirmed and inTrade and exitCond
+
+// ================= ORDERS (OPTIONAL FOR NON-INDEX) =================
+if enter
+    strategy.entry("LONG", strategy.long)
+
+if exit
+    strategy.close("LONG")
+
+// ================= UPDATE MANUAL STATE =================
+if enter
+    inTrade := true
+if exit
+    inTrade := false
+
+// ================= EDGE EVENTS =================
+buyEvent  = enter and not enter[1]
+exitEvent = exit  and not exit[1]
+
+// ================= BACKGROUND =================
+showBG = input.bool(true, "Highlight While in Position")
+bgCol  = input.color(color.new(color.green, 88), "Position Background")
+bgcolor(showBG and inTrade ? bgCol : na)
+
+// ================= LABEL SETTINGS =================
+showLbl = input.bool(true, "Show Entry / Exit Labels")
+
+buyCol  = input.color(color.teal, "BUY Label Color")
+exitCol = input.color(color.red,  "EXIT Label Color")
+
+buyPos  = input.string("Below Bar", "BUY Label Position",  options=["Above Bar","Below Bar"])
+exitPos = input.string("Above Bar", "EXIT Label Position", options=["Above Bar","Below Bar"])
+
+buyOff  = input.int(0, "BUY Label Y Offset")
+exitOff = input.int(0, "EXIT Label Y Offset")
+
+buyY  = buyPos  == "Below Bar" ? low  : high
+exitY = exitPos == "Below Bar" ? low  : high
+
+if showLbl and buyEvent
+    label.new(bar_index, buyY + buyOff, "BUY", xloc=xloc.bar_index, yloc=yloc.price,
+        style=label.style_label_up, color=buyCol, textcolor=color.white)
+
+if showLbl and exitEvent
+    label.new(bar_index, exitY + exitOff, "EXIT", xloc=xloc.bar_index, yloc=yloc.price,
+        style=label.style_label_down, color=exitCol, textcolor=color.white)
+
+// ================= SUPERNDREND PLOTS =================
+upP = plot(plotST and stBull ? stLine : na, "Bullish ST", color=stUpCol, style=plot.style_linebr)
+dnP = plot(plotST and stBear ? stLine : na, "Bearish ST", color=stDnCol, style=plot.style_linebr)
+mid = plot(plotST ? (open + close) / 2 : na, display=display.none)
+fill(mid, upP, color=color.new(stUpCol, 90))
+fill(mid, dnP, color=color.new(stDnCol, 90))
+
+// ================= ALERTS =================
+alertcondition(buyEvent,  "LONG ENTRY", "Long entry signal")
+alertcondition(exitEvent, "EXIT",       "Exit signal")
+
