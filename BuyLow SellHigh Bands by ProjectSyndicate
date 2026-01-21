@@ -1,0 +1,104 @@
+//@version=6
+indicator("BuyLow SellHigh Bands by ProjectSyndicate", shorttitle="BLSH Bands", overlay=true)
+
+// Input parameters
+fiboPeriod = input.int(72, "Period of averaging", minval=1)
+extremes = input.string("HIGH_LOW", "Type of extreme points", 
+     options=["HIGH_LOW", "HIGH_LOW_OPEN", "HIGH_LOW_CLOSE", "OPEN_HIGH_LOW", "CLOSE_HIGH_LOW"])
+margins = input.int(-2, "Margins")
+level1 = input.float(0.786, "Level 1", minval=0, maxval=1)
+level2 = input.float(0.618, "Level 2", minval=0, maxval=1)
+level3 = input.float(0.500, "Level 3", minval=0, maxval=1)
+level4 = input.float(0.382, "Level 4", minval=0, maxval=1)
+level5 = input.float(0.214, "Level 5", minval=0, maxval=1)
+shift = input.int(0, "Horizontal shift of the indicator in bars")
+
+// Alert settings
+enableAlerts = input.bool(true, "Enable Alerts", group="Alert Settings")
+alertOverbought = input.bool(true, "Alert on Overbought Zone (Top)", group="Alert Settings")
+alertOversold = input.bool(true, "Alert on Oversold Zone (Bottom)", group="Alert Settings")
+alertSpacing = input.int(20, "Alert Spacing (bars)", minval=1, tooltip="Minimum bars between alerts to reduce noise", group="Alert Settings")
+
+// Function to calculate extremes based on selected type
+getExtremes(int length) =>
+    var float smax = na
+    var float smin = na
+    
+    if extremes == "HIGH_LOW"
+        smax := ta.highest(high, length)
+        smin := ta.lowest(low, length)
+    else if extremes == "HIGH_LOW_OPEN"
+        smax := (ta.highest(open, length) + ta.highest(high, length)) / 2
+        smin := (ta.lowest(open, length) + ta.lowest(low, length)) / 2
+    else if extremes == "HIGH_LOW_CLOSE"
+        smax := (ta.highest(close, length) + ta.highest(high, length)) / 2
+        smin := (ta.lowest(close, length) + ta.lowest(low, length)) / 2
+    else if extremes == "OPEN_HIGH_LOW"
+        smax := ta.lowest(open, length)
+        smin := ta.highest(open, length)
+    else if extremes == "CLOSE_HIGH_LOW"
+        smax := ta.highest(close, length)
+        smin := ta.lowest(close, length)
+    
+    [smax, smin]
+
+// Calculate extremes
+[smax, smin] = getExtremes(fiboPeriod)
+sdiff = smax - smin
+
+// Calculate Fibonacci levels
+fibo_1000_up = smax
+fibo_0786_up = smin + sdiff * level1
+fibo_0618_up = smin + sdiff * level2
+fibo_0500_up = smin + sdiff * level3
+fibo_0382_up = smin + sdiff * level4
+fibo_0214_up = smin + sdiff * level5
+fibo_0000_dn = smin
+
+// Plot fills (clouds) with black separator lines
+line1 = plot(fibo_1000_up, "Fibo 1.000 Upper", color=color.black, linewidth=2, offset=shift)
+line2 = plot(fibo_0786_up, "Fibo 0.786 Upper", color=color.black, linewidth=2, offset=shift)
+line3 = plot(fibo_0618_up, "Fibo 0.618 Upper", color=color.black, linewidth=2, offset=shift)
+line4 = plot(fibo_0500_up, "Fibo 0.500 Upper", color=color.black, linewidth=2, offset=shift)
+line5 = plot(fibo_0382_up, "Fibo 0.382 Upper", color=color.black, linewidth=2, offset=shift)
+line6 = plot(fibo_0214_up, "Fibo 0.214 Upper", color=color.black, linewidth=2, offset=shift)
+line7 = plot(fibo_0000_dn, "Fibo 0.000 Lower", color=color.black, linewidth=2, offset=shift)
+
+// Fill between levels with INVERTED colors
+// Top = Dark Red/Orange (Overbought), Bottom = Yellow/Light colors (Oversold)
+fill(line1, line2, color=color.new(color.red, 70), title="Fibo 1.000 - Overbought")
+fill(line2, line3, color=color.new(color.orange, 70), title="Fibo 0.786")
+fill(line3, line4, color=color.new(color.yellow, 70), title="Fibo 0.618")
+fill(line4, line5, color=color.new(color.aqua, 70), title="Fibo 0.500")
+fill(line5, line6, color=color.new(#00BFFF, 70), title="Fibo 0.382")
+fill(line6, line7, color=color.new(color.blue, 70), title="Fibo 0.214 - Oversold")
+
+// Alert conditions with spacing threshold
+var int lastOverboughtBar = na
+var int lastOversoldBar = na
+
+// Overbought: Price enters top zone (above 0.786 level)
+inOverboughtZone = close >= fibo_0786_up
+wasNotOverbought = close[1] < fibo_0786_up[1]
+barsSinceLastOverbought = na(lastOverboughtBar) ? alertSpacing + 1 : bar_index - lastOverboughtBar
+overboughtAlert = enableAlerts and alertOverbought and inOverboughtZone and wasNotOverbought and barsSinceLastOverbought >= alertSpacing
+
+if overboughtAlert
+    lastOverboughtBar := bar_index
+
+// Oversold: Price enters bottom zone (below 0.214 level)
+inOversoldZone = close <= fibo_0214_up
+wasNotOversold = close[1] > fibo_0214_up[1]
+barsSinceLastOversold = na(lastOversoldBar) ? alertSpacing + 1 : bar_index - lastOversoldBar
+oversoldAlert = enableAlerts and alertOversold and inOversoldZone and wasNotOversold and barsSinceLastOversold >= alertSpacing
+
+if oversoldAlert
+    lastOversoldBar := bar_index
+
+// Trigger alerts
+alertcondition(overboughtAlert, title="Overbought Zone Alert", message="🔴 SELL SIGNAL: Price entered Overbought Zone (Top Band) - Consider selling or taking profits")
+alertcondition(oversoldAlert, title="Oversold Zone Alert", message="🟢 BUY SIGNAL: Price entered Oversold Zone (Bottom Band) - Consider buying or entering long")
+
+// Plot alert markers on chart using Supertrend-style labels
+plotshape(oversoldAlert, title="Buy", text="Buy", location=location.belowbar, style=shape.labelup, size=size.tiny, color=color.green, textcolor=color.white)
+plotshape(overboughtAlert, title="Sell", text="Sell", location=location.abovebar, style=shape.labeldown, size=size.tiny, color=color.red, textcolor=color.white)
