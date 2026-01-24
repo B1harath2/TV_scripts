@@ -1,0 +1,208 @@
+//@version=5
+indicator("Smart Signal Assistant v2 (KEWME)", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// -----------------------------------------------------------------------------
+// 0. COLORS FOR WHITE BACKGROUND
+// -----------------------------------------------------------------------------
+c_tbl_bg = color.new(color.white, 10)
+c_tbl_txt = color.black
+c_tbl_header = color.new(color.blue, 0)
+c_lbl_price_bg = color.new(color.blue, 85)
+c_lbl_price_txt = color.black
+c_pos_green = color.new(color.green, 10)
+c_neg_red = color.new(color.red, 10)
+
+// -----------------------------------------------------------------------------
+// 1. INPUTS
+// -----------------------------------------------------------------------------
+grp_engine = "Signal Engine"
+mode = input.string("Swing", "Mode", options=["Swing", "Scalping"], group=grp_engine)
+sens = input.float(2.2, "Sensitivity", group=grp_engine)
+period = input.int(1, "Period", group=grp_engine)
+
+grp_ema = "EMA Settings"
+use_ema_filter = input.bool(false, "Use EMA Cross Filter?", group=grp_ema)
+len_ema1 = input.int(9, "Fast EMA", group=grp_ema)
+len_ema2 = input.int(15, "Slow EMA", group=grp_ema)
+
+grp_trade = "Trade Management"
+sl_mult = input.float(1.5, "Stop Loss (ATR Multiplier)", step=0.1, group=grp_trade)
+rr_ratio = input.float(2.0, "Stats Target (1:X)", group=grp_trade)
+lot_size = input.float(0.1, "Lot Size", group=grp_trade) 
+
+grp_trc = "Filters"
+use_trc = input.bool(true, "Use Trend Filter (TRC)?", group=grp_trc)
+adx_thres = input.int(20, "ADX Threshold", group=grp_trc)
+
+grp_vis = "Visuals"
+show_table = input.bool(true, "Show Dashboard", group=grp_vis)
+txt_size = size.small
+
+// -----------------------------------------------------------------------------
+// 2. CALCULATIONS
+// -----------------------------------------------------------------------------
+ema1 = ta.ema(close, len_ema1)
+ema2 = ta.ema(close, len_ema2)
+ema_bullish = ema1 > ema2
+ema_bearish = ema1 < ema2
+
+plot(ema1, color=color.new(color.orange, 0), title="EMA 9")
+plot(ema2, color=color.new(color.purple, 0), title="EMA 15")
+
+global_atr = ta.atr(14)
+mult = mode == "Swing" ? sens : sens * 0.5
+len = mode == "Swing" ? period : period / 1
+[supertrend, dir] = ta.supertrend(mult, len)
+
+[diplus, diminus, adx] = ta.dmi(14, 14)
+is_trending = adx > adx_thres
+filter_adx = use_trc ? is_trending : true
+filter_ema = use_ema_filter ? (dir < 0 ? ema_bullish : ema_bearish) : true
+
+buy_raw = ta.crossover(close, supertrend) and filter_adx and filter_ema
+sell_raw = ta.crossunder(close, supertrend) and filter_adx and filter_ema
+
+// -----------------------------------------------------------------------------
+// 3. DAILY TRACKING LOGIC (Reset Every Day)
+// -----------------------------------------------------------------------------
+var int daily_wins = 0
+var int daily_losses = 0
+var float daily_net_profit_usd = 0.0
+var int daily_total_trades = 0
+
+// দিনের শুরুতে রিসেট করার লজিক
+is_new_day = ta.change(time("D"))
+if is_new_day
+    daily_wins := 0
+    daily_losses := 0
+    daily_net_profit_usd := 0.0
+    daily_total_trades := 0
+
+calc_pips(price_diff) => 
+    float p_val = syminfo.mintick
+    if syminfo.type == "forex"
+        p_val := syminfo.mintick < 0.01 ? 0.0001 : 0.01
+    price_diff / p_val
+
+// -----------------------------------------------------------------------------
+// 4. TRADE LOGIC
+// -----------------------------------------------------------------------------
+var bool in_trade = false
+var string trade_dir = na 
+var float trade_entry = 0.0
+var float trade_sl = 0.0
+var float trade_target_stats = 0.0
+
+var box box_tp = na
+var box box_sl = na
+var line line_entry = na
+var line line_tp1 = na
+var line line_tp2 = na
+var line line_tp3 = na
+
+if in_trade
+    float pips_diff = 0.0
+    bool exit_trade = false
+    bool is_win = false
+    
+    if trade_dir == "long"
+        if high >= trade_target_stats
+            pips_diff := calc_pips(trade_target_stats - trade_entry)
+            label.new(bar_index, high, "Target Hit 🎯\n+" + str.tostring(pips_diff, "#.##"), color=c_pos_green, textcolor=color.white, style=label.style_label_down, size=txt_size)
+            exit_trade := true
+            is_win := true
+        else if low <= trade_sl
+            pips_diff := calc_pips(trade_entry - trade_sl) 
+            label.new(bar_index, low, "SL Hit ❌\n-" + str.tostring(pips_diff, "#.##"), color=c_neg_red, textcolor=color.white, style=label.style_label_up, size=txt_size)
+            exit_trade := true
+            is_win := false
+            pips_diff := -1 * pips_diff 
+            
+    else if trade_dir == "short"
+        if low <= trade_target_stats
+            pips_diff := calc_pips(trade_entry - trade_target_stats)
+            label.new(bar_index, low, "Target Hit 🎯\n+" + str.tostring(pips_diff, "#.##"), color=c_pos_green, textcolor=color.white, style=label.style_label_up, size=txt_size)
+            exit_trade := true
+            is_win := true
+        else if high >= trade_sl
+            pips_diff := calc_pips(trade_sl - trade_entry)
+            label.new(bar_index, high, "SL Hit ❌\n-" + str.tostring(pips_diff, "#.##"), color=c_neg_red, textcolor=color.white, style=label.style_label_down, size=txt_size)
+            exit_trade := true
+            is_win := false
+            pips_diff := -1 * pips_diff
+
+    if exit_trade
+        // আপডেট ডেইলি স্ট্যাটাস
+        daily_total_trades := daily_total_trades + 1
+        daily_net_profit_usd := daily_net_profit_usd + (pips_diff * 10 * lot_size)
+        if is_win
+            daily_wins := daily_wins + 1
+        else
+            daily_losses := daily_losses + 1
+            
+        in_trade := false
+        box.set_right(box_tp, bar_index), box.set_right(box_sl, bar_index)
+        line.set_x2(line_entry, bar_index), line.set_x2(line_tp1, bar_index), line.set_x2(line_tp2, bar_index), line.set_x2(line_tp3, bar_index)
+    else
+        box.set_right(box_tp, bar_index + 1), box.set_right(box_sl, bar_index + 1)
+        line.set_x2(line_entry, bar_index + 1), line.set_x2(line_tp1, bar_index + 1), line.set_x2(line_tp2, bar_index + 1), line.set_x2(line_tp3, bar_index + 1)
+
+// ENTRY LOGIC
+valid_buy = buy_raw and not in_trade
+valid_sell = sell_raw and not in_trade
+
+if valid_buy
+    in_trade := true, trade_dir := "long", trade_entry := close
+    float sl_dist = global_atr * sl_mult
+    trade_sl := close - sl_dist
+    trade_target_stats := close + (sl_dist * rr_ratio)
+    box_tp := box.new(bar_index, trade_target_stats, bar_index + 1, trade_entry, bgcolor=color.new(color.green, 85), border_color=color.new(color.green, 60))
+    box_sl := box.new(bar_index, trade_entry, bar_index + 1, trade_sl, bgcolor=color.new(color.red, 85), border_color=color.new(color.red, 60))
+    line_entry := line.new(bar_index, trade_entry, bar_index + 1, trade_entry, color=color.blue, width=1)
+    line_tp1 := line.new(bar_index, close + sl_dist, bar_index + 1, close + sl_dist, color=color.green, style=line.style_dotted)
+    line_tp2 := line.new(bar_index, close + sl_dist*2, bar_index + 1, close + sl_dist*2, color=color.green, style=line.style_dashed)
+    line_tp3 := line.new(bar_index, close + sl_dist*3, bar_index + 1, close + sl_dist*3, color=color.green, width=2)
+
+if valid_sell
+    in_trade := true, trade_dir := "short", trade_entry := close
+    float sl_dist = global_atr * sl_mult
+    trade_sl := close + sl_dist
+    trade_target_stats := close - (sl_dist * rr_ratio)
+    box_tp := box.new(bar_index, trade_entry, bar_index + 1, trade_target_stats, bgcolor=color.new(color.green, 85), border_color=color.new(color.green, 60))
+    box_sl := box.new(bar_index, trade_sl, bar_index + 1, trade_entry, bgcolor=color.new(color.red, 85), border_color=color.new(color.red, 60))
+    line_entry := line.new(bar_index, trade_entry, bar_index + 1, trade_entry, color=color.blue, width=1)
+    line_tp1 := line.new(bar_index, close - sl_dist, bar_index + 1, close - sl_dist, color=color.green, style=line.style_dotted)
+    line_tp2 := line.new(bar_index, close - sl_dist*2, bar_index + 1, close - sl_dist*2, color=color.green, style=line.style_dashed)
+    line_tp3 := line.new(bar_index, close - sl_dist*3, bar_index + 1, close - sl_dist*3, color=color.green, width=2)
+
+plotshape(valid_buy, title="Buy", text="BUY", style=shape.labelup, location=location.belowbar, color=c_pos_green, textcolor=color.white, size=size.small)
+plotshape(valid_sell, title="Sell", text="SELL", style=shape.labeldown, location=location.abovebar, color=c_neg_red, textcolor=color.white, size=size.small)
+
+// -----------------------------------------------------------------------------
+// 5. DASHBOARD (TODAY'S STATS)
+// -----------------------------------------------------------------------------
+if show_table
+    var tbl = table.new(position.top_right, 2, 7, bgcolor=c_tbl_bg, frame_color=color.gray, frame_width=1)
+    
+    table.cell(tbl, 0, 0, "Today's Trading Summary", text_color=c_tbl_header, bgcolor=c_tbl_bg)
+    table.merge_cells(tbl, 0, 0, 1, 0)
+
+    table.cell(tbl, 0, 1, "Total Trades Today", text_color=c_tbl_txt, text_halign=text.align_left)
+    table.cell(tbl, 1, 1, str.tostring(daily_total_trades), text_color=c_tbl_txt)
+
+    table.cell(tbl, 0, 2, "Daily Wins ✅", text_color=c_tbl_txt, text_halign=text.align_left)
+    table.cell(tbl, 1, 2, str.tostring(daily_wins), text_color=c_pos_green)
+
+    table.cell(tbl, 0, 3, "Daily Losses ❌", text_color=c_tbl_txt, text_halign=text.align_left)
+    table.cell(tbl, 1, 3, str.tostring(daily_losses), text_color=c_neg_red)
+
+    table.cell(tbl, 0, 4, "Net Profit/Loss ($)", text_color=c_tbl_txt, text_halign=text.align_left)
+    table.cell(tbl, 1, 4, "$" + str.tostring(daily_net_profit_usd, "#.##"), text_color=daily_net_profit_usd >= 0 ? c_pos_green : c_neg_red)
+
+    table.cell(tbl, 0, 5, "Market Trend", text_color=c_tbl_txt, text_halign=text.align_left)
+    table.cell(tbl, 1, 5, is_trending ? "TRENDING" : "RANGING", text_color=is_trending ? color.blue : color.gray)
+
+    status_text = in_trade ? (trade_dir == "long" ? "LONG" : "SHORT") : "WAIT"
+    status_col = in_trade ? (trade_dir == "long" ? c_pos_green : c_neg_red) : color.gray
+    table.cell(tbl, 0, 6, "Current Status", text_color=c_tbl_txt, text_halign=text.align_left)
+    table.cell(tbl, 1, 6, status_text, text_color=color.white, bgcolor=status_col)
