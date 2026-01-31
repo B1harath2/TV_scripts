@@ -18,7 +18,7 @@ historicBars = input.int(1000, "Historic Zones Lookback", minval=100, maxval=500
 
 showActiveLabels = input.bool(true, "Show Active Zone Info", group="Display")
 showHistoricLabels = input.bool(false, "Show Historic Zone Info", group="Display")
-labelSize = input.string("Normal", "Label Size", options=["Tiny", "Small", "Normal", "Large"], group="Display")
+labelSize = input.string("Large", "Label Size", options=["Tiny", "Small", "Normal", "Large"], group="Display")
 
 activeSupplyCol = input.color(color.new(color.red, 80), "Active Supply", group="Colors")
 activeDemandCol = input.color(color.new(color.green, 80), "Active Demand", group="Colors")
@@ -332,12 +332,8 @@ if array.size(allZones) > 0
                 
                 // Create label if doesn't exist
                 if na(z.infoLabel)
-                    if z.broken
-                        // Historic zones - label at zone start (left side)
-                        z.infoLabel := label.new(z.startBar + 10, mid, txt, color=color.new(color.black, 100), textcolor=lblColor, size=f_getLabelSize(), style=label.style_label_left)
-                    else
-                        // Active zones - label at right edge
-                        z.infoLabel := label.new(bar_index + 400, mid, txt, color=color.new(color.black, 100), textcolor=lblColor, size=f_getLabelSize(), style=label.style_label_right)
+                    // All zones - label at zone start (left side)
+                    z.infoLabel := label.new(z.startBar + 10, mid, txt, color=color.new(color.black, 100), textcolor=lblColor, size=f_getLabelSize(), style=label.style_label_left)
                 else
                     // Update existing label
                     label.set_text(z.infoLabel, txt)
@@ -345,9 +341,9 @@ if array.size(allZones) > 0
                     label.set_color(z.infoLabel, color.new(color.black, 100))
                     label.set_textcolor(z.infoLabel, lblColor)
                     label.set_size(z.infoLabel, f_getLabelSize())
-                    if not z.broken
-                        // Update position for active zones
-                        label.set_x(z.infoLabel, bar_index + 400)
+                    label.set_style(z.infoLabel, label.style_label_left)
+                    // Keep label at zone start (left side)
+                    label.set_x(z.infoLabel, z.startBar + 10)
             else
                 // Hide info label if corresponding switch is off
                 if not na(z.infoLabel)
