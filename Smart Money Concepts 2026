@@ -1,0 +1,487 @@
+//@version=6
+indicator("Smart Money Concepts 2026", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// INPUT PARAMETERS
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+// UNIVERSAL ZONE HEIGHT SETTINGS
+use_normalized_zones = input.bool(true, "🎯 Normalize All Zone Heights", group="🎯 Universal Zone Settings", tooltip="Make all zones equal height for clean visual")
+zone_height_method = input.string("ATR Based", "Zone Height Method", options=["ATR Based", "Fixed Percentage"], group="🎯 Universal Zone Settings")
+zone_height_atr_mult = input.float(0.75, "Zone Height (ATR Multiplier)", minval=0.1, maxval=3.0, step=0.05, group="🎯 Universal Zone Settings", tooltip="All zones will be this many ATRs tall")
+zone_height_percent = input.float(0.3, "Zone Height (% of Price)", minval=0.05, maxval=2.0, step=0.05, group="🎯 Universal Zone Settings", tooltip="All zones will be this % of current price")
+
+// Market Structure
+swing_length = input.int(10, "Swing Length", minval=3, maxval=50, group="📊 Market Structure")
+show_bos = input.bool(true, "Show BOS", group="📊 Market Structure")
+show_choch = input.bool(true, "Show CHOCH", group="📊 Market Structure")
+show_mss = input.bool(false, "Show MSS (Early Warning)", group="📊 Market Structure")
+
+// Order Blocks
+show_order_blocks = input.bool(true, "Show Order Blocks", group="📦 Order Blocks")
+ob_swing_length = input.int(7, "OB Swing Detection Length", minval=3, maxval=20, group="📦 Order Blocks")
+ob_lookback = input.int(20, "OB Lookback", minval=5, maxval=50, group="📦 Order Blocks")
+ob_displacement_mult = input.float(1.3, "OB Displacement Multiplier", minval=0.5, maxval=5.0, step=0.1, group="📦 Order Blocks")
+max_obs = input.int(5, "Max Order Blocks", minval=1, maxval=10, group="📦 Order Blocks")
+show_ob_info = input.bool(true, "Show OB Info Labels", group="📦 Order Blocks")
+ob_info_size = input.string("Large", "OB Label Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="📦 Order Blocks")
+
+// Breaker Blocks
+show_breaker_blocks = input.bool(false, "Show Breaker Blocks", group="🔄 Breaker Blocks")
+bb_swing_length = input.int(10, "BB Swing Detection Length", minval=2, maxval=20, group="🔄 Breaker Blocks")
+bb_use_displacement = input.bool(true, "BB Displacement Filter", group="🔄 Breaker Blocks")
+bb_displacement_mult = input.float(2.0, "BB Displacement Multiplier", minval=0.5, maxval=5.0, step=0.1, group="🔄 Breaker Blocks")
+bb_invalidation = input.string("Close", "BB Invalidation Method", options=["Close", "Wick"], group="🔄 Breaker Blocks")
+max_bbs = input.int(5, "Max Breaker Blocks", minval=1, maxval=50, group="🔄 Breaker Blocks")
+show_bb_info = input.bool(true, "Show BB Info Labels", group="🔄 Breaker Blocks")
+
+// Fair Value Gaps
+show_fvg = input.bool(true, "Show Fair Value Gaps", group="⚡ Fair Value Gaps")
+fvg_use_atr = input.bool(true, "FVG ATR Filter", group="⚡ Fair Value Gaps")
+fvg_atr_mult = input.float(0.5, "FVG ATR Multiplier", minval=0.1, maxval=3.0, step=0.1, group="⚡ Fair Value Gaps")
+fvg_mitigation = input.string("50% Fill", "FVG Mitigation Type", options=["Touch", "Full Fill", "50% Fill"], group="⚡ Fair Value Gaps")
+max_fvgs = input.int(5, "Max FVGs", minval=1, maxval=100, group="⚡ Fair Value Gaps")
+show_fvg_info = input.bool(true, "Show FVG Info Labels", group="⚡ Fair Value Gaps")
+fvg_label_size = input.string("Small", "FVG Label Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="⚡ Fair Value Gaps")
+fvg_info_size = input.string("Large", "FVG Info Label Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], group="⚡ Fair Value Gaps")
+
+// Premium & Discount
+show_premium_discount = input.bool(true, "Show Premium/Discount Zones", group="💎 Premium & Discount")
+
+// Liquidity (EQH/EQL - UAlgo Logic)
+show_liquidity = input.bool(true, "Show Equal Highs/Lows", group="💧 Liquidity")
+eqhl_pivot_length = input.int(4, "EQH/EQL Pivot Length", minval=1, maxval=20, group="💧 Liquidity")
+eqhl_atr_length = input.int(200, "EQH/EQL ATR Length", minval=1, group="💧 Liquidity")
+eqhl_threshold = input.float(0.10, "EQH/EQL Threshold", minval=0, maxval=1.0, step=0.01, group="💧 Liquidity")
+eqhl_wait_confirmation = input.bool(true, "Wait For Confirmation", group="💧 Liquidity")
+
+// Strength Rating
+enable_strength_rating = input.bool(true, "Enable Strength Rating", group="⭐ Strength Rating")
+min_strength_filter = input.float(3.0, "Minimum Strength Filter", minval=0.0, maxval=10.0, step=0.5, group="⭐ Strength Rating")
+
+// Visualization
+show_legend = input.bool(true, "Show Legend", group="🎨 Visualization")
+
+// Alerts
+enable_ob_alerts = input.bool(true, "Enable Order Block Alerts", group="🔔 Alerts")
+enable_fvg_alerts = input.bool(true, "Enable FVG Alerts", group="🔔 Alerts")
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// COLOR PALETTE (NORMAL RED/GREEN THEME)
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+// Order Blocks
+bull_ob_color = color.new(#089981, 85)
+bull_ob_border = color.new(#089981, 30)
+bull_ob_text = color.new(#089981, 0)
+
+bear_ob_color = color.new(#f23645, 85)
+bear_ob_border = color.new(#f23645, 30)
+bear_ob_text = color.new(#f23645, 0)
+
+// Breaker Blocks - Lighter
+bull_bb_color = color.new(#089981, 90)
+bull_bb_border = color.new(#089981, 50)
+bull_bb_text = color.new(#089981, 0)
+
+bear_bb_color = color.new(#f23645, 90)
+bear_bb_border = color.new(#f23645, 50)
+bear_bb_text = color.new(#f23645, 0)
+
+// FVG
+bull_fvg_color = color.new(#089981, 85)
+bull_fvg_border = color.new(#089981, 30)
+bull_fvg_text = color.new(#089981, 0)
+
+bear_fvg_color = color.new(#f23645, 85)
+bear_fvg_border = color.new(#f23645, 30)
+bear_fvg_text = color.new(#f23645, 0)
+
+// Premium/Discount
+premium_color = color.new(#f23645, 92)
+equilibrium_color = color.new(#787b86, 95)
+discount_color = color.new(#089981, 92)
+
+// Structure - Clean colors
+bos_bull_color = color.new(color.green, 0)
+bos_bear_color = color.new(color.red, 0)
+choch_bull_color = color.new(color.green, 0)
+choch_bear_color = color.new(color.red, 0)
+mss_color = color.new(color.orange, 0)
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// TYPE DEFINITIONS
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+type OB
+    box b
+    label l
+    label info_label
+    float top
+    float bot
+    int bar_idx
+    bool bullish
+    string session
+    int creation_time
+    float strength
+
+type BreakerBlock
+    int startBar
+    float top
+    float bottom
+    string bbType
+    box boxId
+    label labelId
+    label info_label
+    bool mitigated
+    int mitigatedBar
+    float strength
+
+type FVGData
+    box bx
+    label lbl
+    label info_label
+    float top
+    float bot
+    int bar_idx
+    bool bullish
+    float strength
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// VARIABLES & ARRAYS
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+var array<OB> bull_obs = array.new<OB>()
+var array<OB> bear_obs = array.new<OB>()
+var array<BreakerBlock> g_breakerBlocks = array.new<BreakerBlock>()
+
+var array<box> bullishFVGBoxes = array.new<box>()
+var array<float> bullishFVGTops = array.new<float>()
+var array<float> bullishFVGBottoms = array.new<float>()
+var array<label> bullishFVGLabels = array.new<label>()
+var array<label> bullishFVGInfoLabels = array.new<label>()
+var array<float> bullishFVGStrengths = array.new<float>()
+
+var array<box> bearishFVGBoxes = array.new<box>()
+var array<float> bearishFVGTops = array.new<float>()
+var array<float> bearishFVGBottoms = array.new<float>()
+var array<label> bearishFVGLabels = array.new<label>()
+var array<label> bearishFVGInfoLabels = array.new<label>()
+var array<float> bearishFVGStrengths = array.new<float>()
+
+var float last_swing_high = na
+var float last_swing_low = na
+var int last_swing_high_idx = na
+var int last_swing_low_idx = na
+var int swing_trend = 0
+var int last_bos_bar = -999
+var int last_choch_bar = -999
+var int last_structure_label_bar = -999
+var float last_labeled_high = na
+var float last_labeled_low = na
+
+var box premium_box = na
+var box equilibrium_box = na
+var box discount_box = na
+var label premium_label = na
+var label discount_label = na
+var label equilibrium_label = na
+
+// EQH/EQL Variables (UAlgo Logic)
+var float previousHigh = 0.0
+var int highLocX = 0
+var float previousLow = 0.0
+var int lowLocX = 0
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+get_session(bar_time) =>
+    hour_utc = hour(bar_time, "GMT")
+    minute_utc = minute(bar_time, "GMT")
+    time_in_minutes = hour_utc * 60 + minute_utc
+    
+    session_name = "Other"
+    
+    if time_in_minutes >= 480 and time_in_minutes < 1020
+        session_name := "London"
+    else if time_in_minutes >= 780 and time_in_minutes < 1320
+        session_name := "NY"
+    else if time_in_minutes >= 0 and time_in_minutes < 540
+        session_name := "Asian"
+    
+    session_name
+
+calc_pips(price_diff) =>
+    pip_value = syminfo.mintick * 10
+    math.round(price_diff / pip_value)
+
+get_text_size(size_str) =>
+    switch size_str
+        "Tiny" => size.tiny
+        "Small" => size.small
+        "Normal" => size.normal
+        "Large" => size.large
+        "Huge" => size.huge
+        => size.normal
+
+// UNIVERSAL ZONE HEIGHT NORMALIZATION
+get_normalized_zone_height(atr_val) =>
+    if use_normalized_zones
+        if zone_height_method == "ATR Based"
+            atr_val * zone_height_atr_mult
+        else
+            close * (zone_height_percent / 100.0)
+    else
+        na
+
+normalize_zone(original_top, original_bottom, is_bullish, atr_val) =>
+    if use_normalized_zones
+        target_height = get_normalized_zone_height(atr_val)
+        original_mid = (original_top + original_bottom) / 2
+        
+        new_top = original_mid + (target_height / 2)
+        new_bottom = original_mid - (target_height / 2)
+        
+        [new_top, new_bottom]
+    else
+        [original_top, original_bottom]
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// STRENGTH RATING FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+calculate_ob_strength(displacement, zone_height, session_name, age, atr_val) =>
+    if not enable_strength_rating
+        5.0
+    else
+        disp_score = 0.0
+        if atr_val > 0
+            disp_ratio = displacement / atr_val
+            if disp_ratio >= 3.0
+                disp_score := 3.0
+            else if disp_ratio >= 2.0
+                disp_score := 2.5
+            else if disp_ratio >= 1.5
+                disp_score := 2.0
+            else if disp_ratio >= 1.0
+                disp_score := 1.5
+            else
+                disp_score := 1.0
+        else
+            disp_score := 1.0
+        
+        sess_score = 0.0
+        if session_name == "London" or session_name == "NY"
+            sess_score := 2.0
+        else if session_name == "Asian"
+            sess_score := 1.0
+        else
+            sess_score := 0.5
+        
+        age_score = 0.0
+        if age < 50
+            age_score := 2.0
+        else if age < 100
+            age_score := 1.5
+        else if age < 200
+            age_score := 1.0
+        else
+            age_score := 0.5
+        
+        zone_score = 0.0
+        if atr_val > 0
+            zone_ratio = zone_height / atr_val
+            if zone_ratio >= 0.5 and zone_ratio <= 2.0
+                zone_score := 3.0
+            else if zone_ratio >= 0.3 and zone_ratio <= 3.0
+                zone_score := 2.0
+            else
+                zone_score := 1.0
+        else
+            zone_score := 1.5
+        
+        total = disp_score + sess_score + age_score + zone_score
+        math.min(math.max(total, 0.0), 10.0)
+
+calculate_fvg_strength(gap_size, atr_value) =>
+    if not enable_strength_rating
+        5.0
+    else
+        gap_score = 0.0
+        if atr_value > 0
+            gap_ratio = gap_size / atr_value
+            if gap_ratio >= 1.5
+                gap_score := 8.0
+            else if gap_ratio >= 1.0
+                gap_score := 6.0
+            else if gap_ratio >= 0.75
+                gap_score := 4.5
+            else if gap_ratio >= 0.5
+                gap_score := 3.0
+            else
+                gap_score := 1.5
+        else
+            gap_score := 3.0
+        
+        math.min(math.max(gap_score, 0.0), 10.0)
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// PRECALCULATE FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+atr_value = ta.atr(14)
+swing_high_ms = ta.pivothigh(high, swing_length, swing_length)
+swing_low_ms = ta.pivotlow(low, swing_length, swing_length)
+swing_high_ob = ta.pivothigh(high, ob_swing_length, ob_swing_length)
+swing_low_ob = ta.pivotlow(low, ob_swing_length, ob_swing_length)
+pivot_high_bb = ta.pivothigh(high, bb_swing_length, bb_swing_length)
+pivot_low_bb = ta.pivotlow(low, bb_swing_length, bb_swing_length)
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// MARKET STRUCTURE DETECTION (NO DUPLICATES - ONLY 1 LABEL PER BREAK)
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+if barstate.isconfirmed
+    // Update swing highs/lows when new pivots form
+    if not na(swing_high_ms)
+        last_swing_high := swing_high_ms
+        last_swing_high_idx := bar_index - swing_length
+    
+    if not na(swing_low_ms)
+        last_swing_low := swing_low_ms
+        last_swing_low_idx := bar_index - swing_length
+    
+    // ABSOLUTE SINGLE LABEL ENFORCEMENT
+    // Check if we've already labeled this exact swing level
+    bool already_labeled_this_high = not na(last_labeled_high) and not na(last_swing_high) and math.abs(last_swing_high - last_labeled_high) < syminfo.mintick * 5
+    bool already_labeled_this_low = not na(last_labeled_low) and not na(last_swing_low) and math.abs(last_swing_low - last_labeled_low) < syminfo.mintick * 5
+    
+    // Check bullish break (price above last high)
+    if not na(last_swing_high) and close > last_swing_high and bar_index > last_structure_label_bar + 20 and not already_labeled_this_high
+        // Determine label type based on previous trend
+        bool create_label = false
+        string label_text = ""
+        color label_color = color.white
+        
+        if swing_trend == -1 and show_choch
+            // Was bearish, now bullish = CHoCH
+            create_label := true
+            label_text := "CHoCH"
+            label_color := choch_bull_color
+        else if swing_trend == 1 and show_bos
+            // Was bullish, still bullish = BOS
+            create_label := true
+            label_text := "BOS"
+            label_color := bos_bull_color
+        else if swing_trend == 0 and show_bos
+            // Neutral to bullish = BOS
+            create_label := true
+            label_text := "BOS"
+            label_color := bos_bull_color
+        
+        if create_label
+            line.new(last_swing_high_idx, last_swing_high, bar_index, last_swing_high, 
+                 color=label_color, width=2, style=line.style_dashed)
+            label.new(bar_index, last_swing_high, label_text, 
+                 color=color.new(color.black, 100), textcolor=label_color, 
+                 style=label.style_none, size=size.normal)
+            last_structure_label_bar := bar_index
+            last_labeled_high := last_swing_high
+        
+        swing_trend := 1
+    
+    // Check bearish break (price below last low) - ONLY if no bullish break occurred
+    else if not na(last_swing_low) and close < last_swing_low and bar_index > last_structure_label_bar + 20 and not already_labeled_this_low
+        // Determine label type based on previous trend
+        bool create_label = false
+        string label_text = ""
+        color label_color = color.white
+        
+        if swing_trend == 1 and show_choch
+            // Was bullish, now bearish = CHoCH
+            create_label := true
+            label_text := "CHoCH"
+            label_color := choch_bear_color
+        else if swing_trend == -1 and show_bos
+            // Was bearish, still bearish = BOS
+            create_label := true
+            label_text := "BOS"
+            label_color := bos_bear_color
+        else if swing_trend == 0 and show_bos
+            // Neutral to bearish = BOS
+            create_label := true
+            label_text := "BOS"
+            label_color := bos_bear_color
+        
+        if create_label
+            line.new(last_swing_low_idx, last_swing_low, bar_index, last_swing_low, 
+                 color=label_color, width=2, style=line.style_dashed)
+            label.new(bar_index, last_swing_low, label_text, 
+                 color=color.new(color.black, 100), textcolor=label_color, 
+                 style=label.style_none, size=size.normal)
+            last_structure_label_bar := bar_index
+            last_labeled_low := last_swing_low
+        
+        swing_trend := -1
+
+// ══════════════════════════════════════════════════════════════════════════════════════
+// ORDER BLOCK DETECTION WITH NORMALIZED ZONES
+// ══════════════════════════════════════════════════════════════════════════════════════
+
+if show_order_blocks and barstate.isconfirmed
+    // Bullish OB
+    if not na(swing_low_ob)
+        bool found = false
+        float ob_top = na
+        float ob_bot = na
+        int ob_bar = na
+        int ob_time_offset = na
+        
+        for i = ob_swing_length + 1 to ob_swing_length + ob_lookback
+            if not found
+                hist_close = close[i]
+                hist_open = open[i]
+                hist_high = high[i]
+                hist_low = low[i]
+                
+                if hist_close < hist_open
+                    disp = swing_low_ob - hist_low
+                    rng = hist_high - hist_low
+                    
+                    if disp > (rng * ob_displacement_mult) and rng > 0
+                        ob_top := hist_high
+                        ob_bot := hist_low
+                        ob_bar := bar_index - i
+                        ob_time_offset := i
+                        found := true
+
+        if found and not na(ob_top)
+            ob_session = get_session(time[ob_time_offset])
+            age = 0
+            displacement = close - ob_bot
+            zone_height = ob_top - ob_bot
+            strength = calculate_ob_strength(displacement, zone_height, ob_session, age, atr_value)
+            
+            if strength >= min_strength_filter
+                [norm_top, norm_bot] = normalize_zone(ob_top, ob_bot, true, atr_value)
+                
+                b = box.new(ob_bar, norm_top, bar_index + 20, norm_bot, 
+                     border_color=bull_ob_border, 
+                     bgcolor=bull_ob_color, 
+                     border_width=2,
+                     extend=extend.right)
+                
+                l = label.new(ob_bar, norm_bot, "Bull OB", 
+                     color=color.new(#089981, 20), 
+                     textcolor=color.white, 
+                     style=label.style_label_up, 
+                     size=size.small)
+                
+                info_l = label(na)
+                if show_ob_info
+                    pips = calc_pips(zone_height)
+                    distance_pips = calc_pips(math.abs(close - ((norm_top + norm_bot) / 2)))
+                    info_text = "Bullish OB ||| Strength: " + str.tostring(math.round(strength * 10) / 10) + "/10 ||| " + ob_session + " ||| Age: 0 bars ||| " + str.tostring(pips) + " pips ||| " + str.tostring(distance_pips) + " pips away"
+                    mid_price = (nor
