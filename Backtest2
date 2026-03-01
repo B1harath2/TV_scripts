@@ -1,0 +1,169 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// © Since 2020 Zofesu
+
+//@version=6
+strategy("SFP Trend & VWAP Liquidity Pro [Zofesu] Strategy",
+     shorttitle="Zofesu - STVL Pro",
+     overlay=true,
+     max_labels_count=500,
+     initial_capital=10000,
+     pyramiding=0,
+     default_qty_type=strategy.cash,
+     default_qty_value=0)
+
+//---------------------------------------------------------
+//---------------- AUXILIARY FUNCTION ---------------------
+//---------------------------------------------------------
+getFilter(type, len, anchor_period) =>
+    float res = na
+
+    if type == "HMA"
+        res := ta.hma(close, len)
+
+    else if type == "EMA"
+        res := ta.ema(close, len)
+
+    else if type == "SMA"
+        res := ta.sma(close, len)
+
+    else if type == "VWAP"
+        if anchor_period == "Session"
+            res := ta.vwap(hlc3)
+        else if anchor_period == "Week"
+            res := request.security(syminfo.tickerid, "W", ta.vwap(hlc3))
+        else if anchor_period == "Month"
+            res := request.security(syminfo.tickerid, "M", ta.vwap(hlc3))
+        else if anchor_period == "Year"
+            res := request.security(syminfo.tickerid, "12M", ta.vwap(hlc3))
+        else
+            res := ta.vwap(hlc3)
+
+    res
+
+//---------------------------------------------------------
+//------------------------- INPUTS ------------------------
+//---------------------------------------------------------
+groupA       = "Filter A"
+typeA        = input.string("VWAP", "Type", options=["HMA", "EMA", "SMA", "VWAP", "Off"], group=groupA)
+lenA         = input.int(2000, "Length", group=groupA)
+colUpA       = input.color(color.new(#00ffbb, 50), "Up Color", group=groupA)
+colDnA       = input.color(color.new(#ff0055, 50), "Down Color", group=groupA)
+
+groupB       = "Filter B"
+typeB        = input.string("VWAP", "Type", options=["HMA", "EMA", "SMA", "VWAP", "Off"], group=groupB)
+lenB         = input.int(5000, "Length", group=groupB)
+colUpB       = input.color(color.new(#21f33d, 50), "Up Color", group=groupB)
+colDnB       = input.color(color.new(#ff0000, 50), "Down Color", group=groupB)
+
+vwapAnchor   = input.string("Session", "VWAP Anchor", options=["Session", "Week", "Month", "Year", "None"])
+lookback     = input.int(150, "Swing Lookback Period", minval=5)
+
+// Risk Settings
+riskPercent   = input.float(1.0, "Risk % Per Trade", step=0.1)
+rrRatio       = input.float(2.0, "Risk Reward Ratio", step=0.1)
+atrLength     = input.int(14, "ATR Length")
+atrMultiplier = input.float(1.5, "ATR Multiplier")
+partialTP     = input.bool(true, "Enable 50% Partial TP at 1R")
+
+//---------------------------------------------------------
+//----------------------- CALCULATIONS --------------------
+//---------------------------------------------------------
+valA = typeA == "Off" ? na : getFilter(typeA, lenA, vwapAnchor)
+valB = typeB == "Off" ? na : getFilter(typeB, lenB, vwapAnchor)
+
+trendUpA = typeA == "Off" or close > valA
+trendUpB = typeB == "Off" or close > valB
+trendDnA = typeA == "Off" or close < valA
+trendDnB = typeB == "Off" or close < valB
+
+swh = ta.pivothigh(high, lookback, lookback)
+swl = ta.pivotlow(low, lookback, lookback)
+
+var float last_swh = na
+var float last_swl = na
+
+if not na(swh)
+    last_swh := swh
+if not na(swl)
+    last_swl := swl
+
+sfp_bullish = low < last_swl and close > last_swl and low[1] > last_swl
+sfp_bearish = high > last_swh and close < last_swh and high[1] < last_swh
+
+longCondition  = sfp_bullish and trendUpA and trendUpB
+shortCondition = sfp_bearish and trendDnA and trendDnB
+
+//---------------------------------------------------------
+//----------------------- RISK LOGIC ----------------------
+//---------------------------------------------------------
+atrValue = ta.atr(atrLength)
+riskAmount = strategy.equity * (riskPercent / 100)
+
+longStop  = close - (atrValue * atrMultiplier)
+shortStop = close + (atrValue * atrMultiplier)
+
+longRiskPerUnit  = close - longStop
+shortRiskPerUnit = shortStop - close
+
+longQty  = longRiskPerUnit > 0 ? riskAmount / longRiskPerUnit : 0
+shortQty = shortRiskPerUnit > 0 ? riskAmount / shortRiskPerUnit : 0
+
+longTP  = close + (longRiskPerUnit * rrRatio)
+shortTP = close - (shortRiskPerUnit * rrRatio)
+
+//---------------------------------------------------------
+//----------------------- ENTRIES -------------------------
+//---------------------------------------------------------
+if longCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long, qty=longQty)
+
+if shortCondition and strategy.position_size == 0
+    strategy.entry("Short", strategy.short, qty=shortQty)
+
+//---------------------------------------------------------
+//------------------------ EXITS --------------------------
+//---------------------------------------------------------
+if strategy.position_size > 0
+    strategy.exit("Long Exit", from_entry="Long", stop=longStop, limit=longTP)
+
+if strategy.position_size < 0
+    strategy.exit("Short Exit", from_entry="Short", stop=shortStop, limit=shortTP)
+
+// Partial TP
+if partialTP
+    if strategy.position_size > 0
+        strategy.exit("Long Partial", from_entry="Long",
+             limit=close + longRiskPerUnit,
+             qty_percent=50)
+
+    if strategy.position_size < 0
+        strategy.exit("Short Partial", from_entry="Short",
+             limit=close - shortRiskPerUnit,
+             qty_percent=50)
+
+//---------------------------------------------------------
+//----------------------- VISUALS -------------------------
+//---------------------------------------------------------
+plot(valA, "Filter A", color = trendUpA ? colUpA : colDnA, linewidth=2)
+plot(valB, "Filter B", color = trendUpB ? colUpB : colDnB, linewidth=2)
+
+plot(last_swh, "Upper Liquidity", color=color.new(#ff0000, 60), style=plot.style_linebr)
+plot(last_swl, "Lower Liquidity", color=color.new(#00ff08, 60), style=plot.style_linebr)
+
+// BUY / SELL when both filters change color simultaneously
+buyColorChange  = trendUpA and trendUpB and not (trendUpA[1] and trendUpB[1])
+sellColorChange = trendDnA and trendDnB and not (trendDnA[1] and trendDnB[1])
+
+if buyColorChange
+    label.new(bar_index, low, "BUY",
+         color=color.green,
+         textcolor=color.white,
+         style=label.style_label_up,
+         yloc=yloc.belowbar)
+
+if sellColorChange
+    label.new(bar_index, high, "SELL",
+         color=color.red,
+         textcolor=color.white,
+         style=label.style_label_down,
+         yloc=yloc.abovebar)
