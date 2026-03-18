@@ -1,0 +1,104 @@
+//@version=5
+indicator("Alpha SuperTrend Signal [identityKa]", overlay=true, max_labels_count=500)
+// Use atr len 90, manual multiplier 2.4
+// ==========================================
+// 1. USER INPUTS (SETTINGS) - GLOBAL ENGLISH
+// ==========================================
+grp1 = "⚙️ Smart Engine Settings"
+use_auto = input.bool(true, "Auto-Adaptive Sensitivity", group=grp1, tooltip="If enabled, dynamically reduces the multiplier on lower timeframes (like 15m/1h) to prevent lag and catch early reversals.")
+manual_atr = input.int(10, "ATR Length", minval=1, group=grp1)
+manual_factor = input.float(3.0, "Manual Multiplier", step=0.1, minval=0.1, group=grp1, tooltip="Used only if Auto-Adaptive is disabled.")
+
+grp2 = "🎨 identityKa Premium Theme"
+col_up = input.color(#00ffbb, "Bullish Trend (Neon Green)", group=grp2)
+col_dn = input.color(#ff1744, "Bearish Trend (Neon Red)", group=grp2)
+paint_bars = input.bool(true, "Paint Bar Colors Based on Trend", group=grp2)
+
+grp3 = "📊 HUD Dashboard Settings"
+show_dash = input.bool(true, "Show Dashboard", group=grp3)
+dash_pos = input.string("Bottom Right", "Dashboard Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right", "Middle Left"], group=grp3)
+dash_size = input.string("Small", "Dashboard Text Size", options=["Tiny", "Small", "Normal", "Large"], group=grp3)
+
+// ==========================================
+// 2. AUTO TIMEFRAME SENSITIVITY
+// ==========================================
+float smart_factor = manual_factor
+
+if use_auto
+    if timeframe.isintraday
+        if timeframe.multiplier <= 15
+            smart_factor := 1.8 // Fast for scalping (15m and below)
+        else if timeframe.multiplier <= 60
+            smart_factor := 2.2 // Balanced for day trading (1H)
+        else
+            smart_factor := 2.6 // Standard for swing (4H)
+    else
+        smart_factor := 3.0 // Long term default (1D and above)
+
+// ==========================================
+// 3. SUPERTREND CALCULATION
+// ==========================================
+[supertrend, direction] = ta.supertrend(smart_factor, manual_atr)
+
+is_up = direction < 0
+is_dn = direction > 0
+trend_col = is_up ? col_up : col_dn
+
+// ==========================================
+// 4. PREMIUM VISUALIZATION
+// ==========================================
+// Crisp, clean trend line
+plot(supertrend, title="Alpha ST Line", color=trend_col, linewidth=2, style=plot.style_linebr)
+
+// Paint bars for institutional look
+barcolor(paint_bars ? trend_col : na)
+
+// ==========================================
+// 5. FLAWLESS LABEL POSITIONING (V3 FIX)
+// ==========================================
+buy_signal = ta.crossunder(direction, 0)
+sell_signal = ta.crossover(direction, 0)
+
+// Labels are now positioned directly on the SuperTrend line.
+// Independent of candle wicks, providing a clean visual.
+if buy_signal
+    // Label tip touches the line, body hangs below (style_label_up visually inverted logic for lines)
+    label.new(bar_index, supertrend, "BUY", color=color.new(col_up, 85), style=label.style_label_up, textcolor=col_up, size=size.small, yloc=yloc.price)
+
+if sell_signal
+    // Label tip touches the line, body floats above
+    label.new(bar_index, supertrend, "SELL", color=color.new(col_dn, 85), style=label.style_label_down, textcolor=col_dn, size=size.small, yloc=yloc.price)
+
+// ==========================================
+// 6. HUD DASHBOARD & AI SUGGESTION
+// ==========================================
+// AI Logic: If price is within 0.5 ATR of the SuperTrend line, it is testing the boundary (Dangerous).
+atr_val = ta.atr(manual_atr)
+dist_to_st = math.abs(close - supertrend)
+is_testing = dist_to_st < (atr_val * 0.5)
+
+string ai_suggestion = is_testing ? "Dangerous" : is_up ? "LONG" : "SHORT"
+color ai_color = ai_suggestion == "LONG" ? col_up : ai_suggestion == "SHORT" ? col_dn : color.new(#ff9800, 0)
+
+var string p_pos = dash_pos == "Top Right" ? position.top_right : dash_pos == "Top Left" ? position.top_left : dash_pos == "Bottom Right" ? position.bottom_right : dash_pos == "Bottom Left" ? position.bottom_left : dash_pos == "Middle Right" ? position.middle_right : position.middle_left
+var string p_size = dash_size == "Tiny" ? size.tiny : dash_size == "Small" ? size.small : dash_size == "Normal" ? size.normal : size.large
+
+if barstate.islast and show_dash
+    var table hud = table.new(p_pos, 2, 4, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.new(color.gray, 80))
+    table.cell(hud, 0, 0, "ENGINE MODE", text_color=color.gray, text_size=p_size)
+    table.cell(hud, 1, 0, use_auto ? "AUTO-ADAPTIVE" : "MANUAL", text_color=color.yellow, text_size=p_size)
+    
+    table.cell(hud, 0, 1, "MACRO TREND", text_color=color.gray, text_size=p_size)
+    table.cell(hud, 1, 1, is_up ? "BULLISH" : "BEARISH", text_color=trend_col, text_size=p_size)
+    
+    table.cell(hud, 0, 2, "ACTIVE MULTIPLIER", text_color=color.gray, text_size=p_size)
+    table.cell(hud, 1, 2, str.tostring(smart_factor, "#.##") + "x", text_color=color.white, text_size=p_size)
+
+    table.cell(hud, 0, 3, "AI SUGGESTION", text_color=color.gray, text_size=p_size)
+    table.cell(hud, 1, 3, ai_suggestion, text_color=ai_color, text_size=p_size)
+
+// ==========================================
+// 7. ALERTS
+// ==========================================
+alertcondition(buy_signal, title="🟢 Alpha BUY", message="identityKa: Trend reversed UP! (Bullish Signal)")
+alertcondition(sell_signal, title="🔴 Alpha SELL", message="identityKa: Trend reversed DOWN! (Bearish Signal)")
