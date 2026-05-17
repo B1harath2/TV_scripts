@@ -1,0 +1,160 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BackQuant
+
+//@version=6
+indicator("Adaptive Trend Envelope [BackQuant]", overlay=true)
+
+// Input groups
+const string core  = "Core Trend"
+const string adpt  = "Adaptive Envelope"
+const string reg   = "Regime Logic"
+const string ui    = "UI and Plotting Settings"
+
+// Core trend inputs
+float    src           =   input.source(close, "Source", group=core)
+int      fastLen       =   input.int(7, "Fast EMA Length", minval=1, group=core)
+int      slowLen       =   input.int(34, "Slow EMA Length", minval=1, group=core)
+int      blendLen      =   input.int(30, "Blend Smoothing Length", minval=1, group=core, tooltip="Smoothing for blend weight and final trend spine")
+
+// Envelope inputs
+int      retLenS      =    input.int(20, "Return Volatility Short", minval=2, group=adpt)
+int      retLenL      =    input.int(80, "Return Volatility Long", minval=5, group=adpt)
+float    bandMult     =    input.float(1.9, "Band Width Multiplier", step=0.1, group=adpt)
+float    ewmaAlpha    =    input.float(0.09, "EWMA Alpha (σ)", step=0.01, minval=0.01, maxval=1.0, group=adpt)
+
+// Regime logic inputs
+int      confirmBars  =    input.int(1, "Confirmation Bars", minval=1, group=reg, tooltip="Bars required outside band to confirm trend")
+float    hysteresis   =    input.float(0.35, "Hysteresis Fraction", step=0.05, minval=0.0, maxval=0.9, group=reg)
+
+// Visual inputs
+color    longcol      =    input.color(#00ff00, "Bullish Color", group=ui, inline="col")
+color    shortcol     =    input.color(#ff0000, "Bearish Color", group=ui, inline="col")
+bool     paintCandles =    input.bool(true, "Paint Candles by Trend?", group=ui)
+bool     showSignals  =    input.bool(true, "Show Buy and Sell Signals?", group=ui)
+
+// Helpers
+clamp(x, a, b) =>
+    math.max(a, math.min(b, x))
+
+ewma_var(x, alpha) =>
+    var float v = na
+    v := na(v[1]) ? (x * x) : (1.0 - alpha) * v[1] + alpha * (x * x)
+    v
+
+// Core trend spine
+emaFast = ta.ema(src, fastLen)
+emaSlow = ta.ema(src, slowLen)
+
+// Log returns
+r = math.log(src / src[1])
+
+// Volatility ratio
+volS = ta.stdev(r, retLenS)
+volL = ta.stdev(r, retLenL)
+vr = volL == 0.0 ? 1.0 : volS / volL
+
+// Volatility-adaptive blend
+wRaw = clamp(1.0 - (vr - 0.7) / 0.9, 0.0, 1.0)
+w = ta.ema(wRaw, blendLen)
+
+spineRaw = w * emaFast + (1.0 - w) * emaSlow
+spine = ta.ema(spineRaw, blendLen)
+
+// Envelope construction
+v = ewma_var(r, ewmaAlpha)
+sig = math.sqrt(math.max(v, 0.0))
+
+band = spine * sig * bandMult
+upper = spine + band
+lower = spine - band
+
+// Inner hysteresis band
+inner = band * hysteresis
+upperIn = spine + inner
+lowerIn = spine - inner
+
+// Regime detection
+bullBreak = close > upper
+bearBreak = close < lower
+
+bullConf = math.sum(bullBreak ? 1 : 0, confirmBars) == confirmBars
+bearConf = math.sum(bearBreak ? 1 : 0, confirmBars) == confirmBars
+
+var int regime = 0 // 1 bull, -1 bear, 0 neutral
+
+if bullConf
+    regime := 1
+else if bearConf
+    regime := -1
+else
+    if regime == 1 and close < spine
+        regime := 0
+    if regime == -1 and close > spine
+        regime := 0
+
+// Regime states
+isBull = regime == 1
+isBear = regime == -1
+isFlat = regime == 0
+
+// Colors
+neuCol = #787b8640
+trendCol = isBull ? longcol : isBear ? shortcol : neuCol
+
+// Active trend line
+baseLine = isBull ? lower : isBear ? upper : close
+
+// Hidden plots for fills
+pBase = plot(baseLine, display=display.none)
+pPx   = plot(close, display=display.none)
+
+// Main trend line (on top)
+plot(baseLine, "Adaptive Trend", color=trendCol, linewidth=2)
+
+// Directional energy fill
+fill(
+      pPx, pBase,
+      close > baseLine ? baseLine : close,
+      close > baseLine ? close : baseLine,
+      close > baseLine ? color.new(longcol, 15) : na,
+      close > baseLine ? color.new(longcol, 85) : na,
+      title="Bull Energy")
+
+fill(
+      pPx, pBase,
+      close < baseLine ? baseLine : close,
+      close < baseLine ? close : baseLine,
+      close < baseLine ? color.new(shortcol, 15) : na,
+      close < baseLine ? color.new(shortcol, 85) : na,
+      title="Bear Energy")
+
+rim = ta.atr(14) * 0.06
+
+pRimUp = plot(close - rim, display=display.none)
+pRimDn = plot(close + rim, display=display.none)
+
+fill(pPx, pRimUp, isBull ? color.new(longcol, 35) : na, title="Bull Rim")
+fill(pPx, pRimDn, isBear ? color.new(shortcol, 35) : na, title="Bear Rim")
+
+var int lastSignal = 0   //  1 = last printed bull, -1 = last printed bear, 0 = none
+
+bullStart = isBull and lastSignal != 1
+bearStart = isBear and lastSignal != -1
+
+if bullStart
+    lastSignal := 1
+if bearStart
+    lastSignal := -1
+
+plotshape(bullStart, "Buy Signals", shape.labelup, location.belowbar, longcol, 0, "𝑩𝒖𝒚", chart.fg_color, true, size.large)
+plotshape(bearStart, "Sell Signals", shape.labeldown, location.abovebar, shortcol, 0, "𝑺𝒆𝒍𝒍", chart.fg_color, true, size.large, display = showSignals?display.all:display.none)
+
+// Candle coloring
+barcolor(paintCandles ? color.new(lastSignal==1?longcol:shortcol, 40) : na, title="Trend Candles")
+
+alertcondition(bullStart, "Bull Trend Start", "Bull trend started {{exchange}}:{{ticker}}")
+alertcondition(bearStart, "Bear Trend Start", "Bear trend started {{exchange}}:{{ticker}}")
+
+alertcondition(isFlat and regime[1] != 0, "Trend Exit", "Trend exited to neutral {{exchange}}:{{ticker}}") 
+alertcondition(ta.cross(close, spine), "Spine Cross", "Price crossed trend spine {{exchange}}:{{ticker}}")
+
