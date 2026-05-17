@@ -1,0 +1,104 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BOSWaves
+
+//@version=6
+indicator("LogPressure Envelope", overlay=true, max_labels_count=500)
+
+// User-configurable inputs
+maType   = input.string("EMA", "Midline Type", options=["EMA","SMA","WMA"])
+opacity  = input.int(85, "Line Opacity", minval=0, maxval=100)
+enableCandles = input.bool(true, "Enable Candle Coloring")
+
+// Internal parameters  
+len        = 40       // MA Length
+lenStd     = 50       // StdDev Length
+multUp     = 1.2      // Upside Multiplier
+multDn     = 0.8      // Downside Multiplier
+fadeBars   = 5        // Trend fade bars
+fanLines   = 10       // Number of lines to replace cloud
+
+// Safety check
+if close <= 0
+    runtime.error("Requires positive prices (log undefined for <= 0).")
+
+// Log midline calculation
+logP   = math.log(close)
+ma_log = maType == "EMA" ? ta.ema(logP, len) : maType == "SMA" ? ta.sma(logP, len) : ta.wma(logP, len)
+logMA  = math.exp(ma_log)
+
+// Asymmetric volatility calculation
+stdev_log = ta.stdev(logP, lenStd)
+upperBand = math.exp(ma_log + multUp * stdev_log)
+lowerBand = math.exp(ma_log - multDn * stdev_log)
+
+// Fade logic
+uptrend_raw = close >= logMA
+var float trend_strength = uptrend_raw ? 1.0 : 0.0
+target = uptrend_raw ? 1.0 : 0.0
+trend_strength += (target - trend_strength) / fadeBars
+
+// Enhanced colors
+roc       = ta.roc(logMA, 5)
+midColor  = roc > 0 ? color.rgb(0, 200, 255) : color.rgb(255, 120, 0)
+orangeCol = color.rgb(255, 102, 0)
+blueCol   = color.rgb(0, 191, 255)
+
+blend(a, b, t) =>
+    r = math.round(color.r(a) + (color.r(b) - color.r(a)) * t)
+    g = math.round(color.g(a) + (color.g(b) - color.g(a)) * t)
+    b_ = math.round(color.b(a) + (color.b(b) - color.b(a)) * t)
+    color.rgb(r, g, b_)
+
+// Midline
+plot(logMA, "Midline", color=midColor, linewidth=2)
+
+// --- Fan lines replacing cloud (no price scale readings) ---
+l0 = lowerBand
+l1 = lowerBand + (upperBand - lowerBand) * 1/9
+l2 = lowerBand + (upperBand - lowerBand) * 2/9
+l3 = lowerBand + (upperBand - lowerBand) * 3/9
+l4 = lowerBand + (upperBand - lowerBand) * 4/9
+l5 = lowerBand + (upperBand - lowerBand) * 5/9
+l6 = lowerBand + (upperBand - lowerBand) * 6/9
+l7 = lowerBand + (upperBand - lowerBand) * 7/9
+l8 = lowerBand + (upperBand - lowerBand) * 8/9
+l9 = upperBand
+
+plot(l0, color=color.new(orangeCol, opacity), linewidth=1, trackprice=false)
+plot(l1, color=color.new(orangeCol, opacity*0.9), linewidth=1, trackprice=false)
+plot(l2, color=color.new(orangeCol, opacity*0.8), linewidth=1, trackprice=false)
+plot(l3, color=color.new(orangeCol, opacity*0.7), linewidth=1, trackprice=false)
+plot(l4, color=color.new(orangeCol, opacity*0.6), linewidth=1, trackprice=false)
+plot(l5, color=color.new(blueCol, opacity*0.6), linewidth=1, trackprice=false)
+plot(l6, color=color.new(blueCol, opacity*0.7), linewidth=1, trackprice=false)
+plot(l7, color=color.new(blueCol, opacity*0.8), linewidth=1, trackprice=false)
+plot(l8, color=color.new(blueCol, opacity*0.9), linewidth=1, trackprice=false)
+plot(l9, color=color.new(blueCol, opacity), linewidth=1, trackprice=false)
+
+// Detect trend for markers
+var float prev_trend_strength = trend_strength
+var trend = bool(na)
+
+cloud_flip_up   = prev_trend_strength < 0.6 and trend_strength >= 0.6
+cloud_flip_down = prev_trend_strength >= 0.4 and trend_strength < 0.4
+prev_trend_strength := trend_strength
+
+if cloud_flip_up
+    trend := true
+if cloud_flip_down
+    trend := false
+
+// Enhanced Buy/Sell markers
+plotshape(trend != trend[1] and trend, 
+          title="Buy Signal", style=shape.labelup, location=location.belowbar, 
+          color=blueCol, size=size.normal, text="BUY", textcolor=color.white)
+
+plotshape(trend != trend[1] and not trend, 
+          title="Sell Signal", style=shape.labeldown, location=location.abovebar, 
+          color=orangeCol, size=size.normal, text="SELL", textcolor=color.white)
+
+// Candle coloring
+candle_bull = close > logMA and trend_strength > 0.6
+candle_bear = close < logMA and trend_strength < 0.4
+candle_color = enableCandles ? (candle_bull ? color.new(blueCol, 30) : candle_bear ? color.new(orangeCol, 30) : na) : na
+barcolor(candle_color)
