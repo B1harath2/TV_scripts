@@ -94,3 +94,5 @@ plotshape(showSig and showGate and blocked ? (rawBullFlip ? trailUpper : trailLo
 alertcondition(bullFlip, "Vol-Gated ST Bullish", "Vol-Gated ST bullish on {{ticker}}")
 alertcondition(bearFlip, "Vol-Gated ST Bearish", "Vol-Gated ST bearish on {{ticker}}")
 alertcondition(blocked, "Signal Blocked", "Flip blocked by volatility gate on {{ticker}}")
+
+//1.5, 50
