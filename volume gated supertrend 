@@ -1,0 +1,96 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BackQuant
+
+
+//@version=6
+indicator("Volatility Gated Supertrend [BackQuant]", "Vol-Gated ST [BackQuant]", overlay = true)
+
+// Inputs 
+const string g1 = "Supertrend"
+const string g2 = "Volatility Gate"
+const string g3 = "UI Settings"
+
+float mult    = input.float(3.0, "ATR Multiplier", minval = 0.1, maxval = 10.0, step = 0.1, group = g1,tooltip = "Standard supertrend multiplier. Higher = wider bands, fewer flips.")
+int   atrLen  = input.int(14, "ATR Length", minval = 1, maxval = 100, group = g1,tooltip = "ATR lookback for band width.")
+
+bool  useGate = input.bool(true, "Volatility Gate", group = g2,tooltip = "When enabled, trend flips are blocked during low-volatility regimes. Kills whipsaws in chop.")
+int   fastATR_= input.int(7, "Fast ATR", minval = 1, maxval = 50, group = g2,tooltip = "Short ATR used to measure current volatility.")
+int   slowATR_= input.int(50, "Slow ATR", minval = 20, maxval = 200, group = g2,tooltip = "Long ATR used as the baseline for normal volatility.")
+float gateMin = input.float(0.75, "Gate Threshold", minval = 0.1, maxval = 2.0, step = 0.05, group = g2,tooltip = "When fast ATR / slow ATR drops below this, the gate closes and flips are blocked. Lower = more permissive.")
+
+bool  showSig  = input.bool(true, "Show Signals", group = g3)
+bool  showFill = input.bool(true, "Trend Fill", group = g3)
+bool  showGate = input.bool(true, "Show Gate Status", group = g3,tooltip = "Dims the band and candles when the volatility gate is blocking flips.")
+bool  paintBar = input.bool(true, "Color Candles", group = g3)
+color bullCol  = input.color(#00ff00, "Bullish", inline = "c", group = g3)
+color bearCol  = input.color(#ff0000, "Bearish", inline = "c", group = g3)
+color gateCol  = input.color(#555555, "Gated", inline = "c", group = g3)
+
+// Supertrend 
+float atr = ta.atr(atrLen)
+float src = hl2
+float rawUpper = src + atr * mult
+float rawLower = src - atr * mult
+
+var float trailUpper = na
+var float trailLower = na
+
+trailLower := not na(trailLower[1]) and close[1] > trailLower[1] ? math.max(rawLower, trailLower[1]) : rawLower
+trailUpper := not na(trailUpper[1]) and close[1] < trailUpper[1] ? math.min(rawUpper, trailUpper[1]) : rawUpper
+
+// Volatility Gate 
+float fastATR  = ta.atr(fastATR_)
+float slowATR  = ta.atr(slowATR_)
+float volRatio = slowATR > 0 ? fastATR / slowATR : 1.0
+bool  gateOpen = not useGate or volRatio >= gateMin
+
+// Trend Logic 
+var int trend = 0
+
+bool rawBullFlip = close > trailUpper and trend != 1
+bool rawBearFlip = close < trailLower and trend != -1
+
+if rawBullFlip and gateOpen
+    trend := 1
+if rawBearFlip and gateOpen
+    trend := -1
+
+float trendBand = trend == 1 ? trailLower : trend == -1 ? trailUpper : na
+
+bool trendFlip = trend != trend[1] and trend[1] != 0
+bool bullFlip  = trend == 1 and trend[1] == -1
+bool bearFlip  = trend == -1 and trend[1] == 1
+bool blocked   = (rawBullFlip or rawBearFlip) and not gateOpen
+
+// Plot  
+color trendCol = not gateOpen and showGate ? gateCol : trend == 1 ? bullCol : trend == -1 ? bearCol : color.gray
+int bandAlpha  = not gateOpen and showGate ? 50 : 20
+
+pBand  = plot(not trendFlip ? trendBand : na, "Supertrend", color.new(trendCol, bandAlpha), 2, plot.style_linebr)
+pPrice = plot(hl2, display = display.none, editable = false)
+fill(pBand, pPrice, hl2, trendBand, color(na), color.new(trendCol, showFill ? 82 : 100))
+
+// Outer glow
+float glowUp = not trendFlip and trend == 1 ? trendBand - atr * 0.15 : na
+float glowDn = not trendFlip and trend == -1 ? trendBand + atr * 0.15 : na
+pGlowUp  = plot(glowUp, display = display.none, editable = false)
+pGlowDn  = plot(glowDn, display = display.none, editable = false)
+pBandUp  = plot(trend == 1 and not trendFlip ? trendBand : na, display = display.none, editable = false)
+pBandDn  = plot(trend == -1 and not trendFlip ? trendBand : na, display = display.none, editable = false)
+fill(pBandUp, pGlowUp, color = color.new(trendCol, 88))
+fill(pBandDn, pGlowDn, color = color.new(trendCol, 88))
+
+// Candles
+barcolor(paintBar ? color.new(trendCol, 30) : na)
+
+// Signals
+plotshape(showSig and bullFlip ? trendBand : na, "Bull Flip",shape.labelup, location.absolute, bullCol,text = "▲", textcolor = chart.bg_color, size = size.small)
+plotshape(showSig and bearFlip ? trendBand : na, "Bear Flip",shape.labeldown, location.absolute, bearCol,text = "▼", textcolor = chart.bg_color, size = size.small)
+
+// Blocked flips
+plotshape(showSig and showGate and blocked ? (rawBullFlip ? trailUpper : trailLower) : na, "Blocked",shape.xcross, location.absolute, gateCol, size = size.tiny)
+
+// Alerts 
+alertcondition(bullFlip, "Vol-Gated ST Bullish", "Vol-Gated ST bullish on {{ticker}}")
+alertcondition(bearFlip, "Vol-Gated ST Bearish", "Vol-Gated ST bearish on {{ticker}}")
+alertcondition(blocked, "Signal Blocked", "Flip blocked by volatility gate on {{ticker}}")
