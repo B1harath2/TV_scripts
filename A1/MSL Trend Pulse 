@@ -1,0 +1,218 @@
+// This work is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+// https://creativecommons.org/licenses/by-nc-sa/4.0/
+// © MarketStructureLab
+// MSL Trend Pulse, developed by MarketStructureLab.
+// May your trades be green and your stops never hit. Good luck out there.
+//@version=6
+indicator(title = "MSL Trend Pulse", shorttitle = "MSL Pulse", overlay = false)
+//==== INPUTS ============================================================
+groupCalc   = "Adaptive Basis"
+groupSignal = "Velocity Engine"
+groupVisual = "Visuals"
+groupTable  = "Dashboard"
+flowCap     = input.int(50, "Maximum Length", minval = 2, group = groupCalc,
+    tooltip = "Upper cap for the adaptive basis EMA length. Higher = smoother, slower basis. Lower = more reactive, noisier.")
+thrustGain  = input.float(5.0, "Accelerator Multiplier", minval = 0.0, step = 0.5, group = groupCalc,
+    tooltip = "Boosts basis reactivity when price acceleration is high. Higher = quicker pivots, more noise. 0 = no acceleration boost.")
+scaleSpan   = input.int(100, "Normalisation Window", minval = 10, step = 10, group = groupSignal,
+    tooltip = "Lookback used to normalise velocity for the gradient histogram. Higher = smoother color transitions across regimes.")
+tideDepth   = input.int(100, "Wave Bias Lookback", minval = 1, group = groupSignal,
+    tooltip = "Number of past bullish and bearish wave extremes used to compute Bias and Magnitude. Higher = slower bias rotation.")
+paintBars   = input.bool(true, "Reactive Candles", group = groupVisual,
+    tooltip = "Color chart candles by velocity strength and direction. Soft tone = weak, vivid tone = strong.")
+bullColor   = input.color(#00C896, "Bull / Bear", group = groupVisual, inline = "trend",
+    tooltip = "Color for bullish basis tint and bullish strength.")
+bearColor   = input.color(#F04A64, "", group = groupVisual, inline = "trend",
+    tooltip = "Color for bearish basis tint and bearish strength.")
+bullSoft    = input.color(#36B39A, "Bull Soft / Strong", group = groupVisual, inline = "bull",
+    tooltip = "Soft and strong bull tones used in the histogram gradient.")
+riseHot     = input.color(#00D9A6, "", group = groupVisual, inline = "bull",
+    tooltip = "Strong bull tone for the histogram gradient peak.")
+bearSoft    = input.color(#C45670, "Bear Soft / Strong", group = groupVisual, inline = "bear",
+    tooltip = "Soft and strong bear tones used in the histogram gradient.")
+fallHot     = input.color(#FF5C7A, "", group = groupVisual, inline = "bear",
+    tooltip = "Strong bear tone for the histogram gradient trough.")
+showTable   = input.bool(true, "Show Dashboard", group = groupTable,
+    tooltip = "Show the 4-row dashboard with current Phase, Magnitude, Bias and State.")
+windowMode  = input.string("From start", "Window", options = ["From start", "Custom"], group = groupTable, inline = "window",
+    tooltip = "From start = use all bars on chart for wave bookkeeping. Custom = only count waves after Start Date.")
+originStamp = input.time(timestamp("1 Jan 2020 00:00 +0000"), "Start Date", group = groupTable, inline = "window",
+    tooltip = "Wave bookkeeping starts at this timestamp when Window = Custom.")
+//==== HELPERS ===========================================================
+safeDiv(float num, float den, float fallback) =>
+    (na(num) or na(den) or den == 0.0) ? fallback : (num / den)
+guardAvg(float value, float fallback) =>
+    (na(value) or value == 0.0) ? fallback : value
+activeWindow() =>
+    windowMode == "From start" or time > originStamp
+labelMagnitude(float r) =>
+    r < 0.75 ? "Weak"   :
+     r < 1.25 ? "Normal" :
+     r < 1.75 ? "Strong" :
+     "Extreme"
+labelState(float r, bool pulseUp, bool tideUp, bool tideDn) =>
+    r >= 1.75                                            ? "Overheated" :
+     ((pulseUp and tideDn) or (not pulseUp and tideUp))   ? "Cooling"    :
+     r >= 1.25                                            ? "Expansion"  :
+     r <  0.75                                            ? "Cooling"    :
+     "Neutral"
+//==== CALCULATIONS ======================================================
+flowSrc      = close
+absExtreme   = ta.highest(math.abs(flowSrc), 200)
+safeExtent   = absExtreme == 0.0 ? 1.0 : absExtreme
+srcRatio     = (flowSrc + safeExtent) / (2.0 * safeExtent)
+flowLen      = 5.0 + srcRatio * (flowCap - 5.0)
+barStep      = math.abs(flowSrc - nz(flowSrc[1]))
+stepCeiling  = ta.highest(barStep, 200)
+safeCeiling  = stepCeiling == 0.0 ? 1.0 : stepCeiling
+thrustNorm   = barStep / safeCeiling
+baseAlpha    = 2.0 / (flowLen + 1.0)
+liveAlpha    = math.min(1.0, baseAlpha * (1.0 + thrustNorm * thrustGain))
+var float trendLine = na
+trendLine := na(trendLine[1]) ? close : liveAlpha * close + (1.0 - liveAlpha) * trendLine[1]
+//==== SIGNAL ENGINE =====================================================
+type LegBook
+    array<float> peak
+    array<int>   bars
+var LegBook upLegs = LegBook.new(array.new<float>(), array.new<int>())
+var LegBook dnLegs = LegBook.new(array.new<float>(), array.new<int>())
+smoothClose = ta.rma(close, 10)
+smoothOpen  = ta.rma(open,  10)
+var int   segOrigin     = na
+var float pulse         = 0.0
+var int   lastSignalBar = na
+var int   lastSignalDir = 0
+if na(segOrigin) and activeWindow()
+    segOrigin := bar_index
+longSignal  = close > trendLine and close[1] <= trendLine
+shortSignal = close < trendLine and close[1] >= trendLine
+// Pre-compute leg span + leg extremes globally to satisfy ta.* consistency
+segLen      = math.max(1, bar_index - nz(segOrigin, bar_index))
+pulseSegLow  = ta.lowest(pulse,  segLen)
+pulseSegHigh = ta.highest(pulse, segLen)
+if activeWindow()
+    if longSignal
+        dnLegs.peak.unshift(pulseSegLow)
+        dnLegs.bars.unshift(bar_index - nz(segOrigin, bar_index))
+        segOrigin     := bar_index
+        pulse         := smoothClose - smoothOpen
+        lastSignalBar := bar_index
+        lastSignalDir := 1
+    else if shortSignal
+        upLegs.peak.unshift(pulseSegHigh)
+        upLegs.bars.unshift(bar_index - nz(segOrigin, bar_index))
+        segOrigin     := bar_index
+        pulse         := smoothClose - smoothOpen
+        lastSignalBar := bar_index
+        lastSignalDir := -1
+pulse := pulse + smoothClose - smoothOpen
+pulseSmooth = ta.hma(pulse, 5)
+//==== SIGNAL STATS ======================================================
+// Guard slice with size check; on early bars the wave logs are empty and a
+// raw slice(0, 0) on a size-0 array throws RE10045.
+upMeanRaw = upLegs.peak.size() > 0 ? upLegs.peak.slice(0, math.min(tideDepth, upLegs.peak.size())).avg() : na
+dnMeanRaw = dnLegs.peak.size() > 0 ? dnLegs.peak.slice(0, math.min(tideDepth, dnLegs.peak.size())).avg() : na
+upMean = guardAvg(upMeanRaw,           1.0)
+dnMean = guardAvg(math.abs(dnMeanRaw), 1.0)
+tideTilt = upMean - dnMean
+tideUp   = tideTilt > 0
+tideDn   = tideTilt < 0
+pulseUp       = pulse >= 0
+pulseRatio    = pulseUp ? safeDiv(pulse, upMean, 0.0) : safeDiv(math.abs(pulse), dnMean, 0.0)
+pulseRatioAbs = math.abs(pulseRatio)
+//==== VISUAL STATE ======================================================
+isUptrend  = ta.wma(close, 2) > trendLine
+trendTone  = isUptrend ? color.new(bullColor, 28) : color.new(bearColor, 28)
+upFlipMark = isUptrend and not isUptrend[1]
+dnFlipMark = not isUptrend and isUptrend[1]
+pulseFloor = ta.lowest(pulse, scaleSpan)
+pulseCeil  = ta.highest(pulse, scaleSpan)
+pulseSpan  = pulseCeil - pulseFloor
+pulseNorm  = pulseSpan == 0.0 ? 0.5 : (pulse - pulseFloor) / pulseSpan
+histTone   = pulse < 0 ? color.from_gradient(pulseNorm, 0.0, 0.5, fallHot, bearSoft) : color.from_gradient(pulseNorm, 0.5, 1.0, bullSoft, riseHot)
+bodyTone = color.new(histTone, 58)
+wickTone = color.new(histTone, 35)
+edgeTone = color.new(histTone, 42)
+//==== PLOTS =============================================================
+plot(trendLine, title = "Adaptive Basis", color = trendTone, linewidth = 3, force_overlay = true, display = display.all - display.status_line)
+plotshape(upFlipMark ? trendLine : na, title = "Bull Flip Mark", style = shape.diamond, location = location.absolute,
+    color = color.new(bullColor, 0), size = size.tiny, force_overlay = true, display = display.all - display.status_line)
+plotshape(dnFlipMark ? trendLine : na, title = "Bear Flip Mark", style = shape.diamond, location = location.absolute,
+    color = color.new(bearColor, 0), size = size.tiny, force_overlay = true, display = display.all - display.status_line)
+plot(0, title = "Center Line", color = color.new(#3A4252, 35), linewidth = 1, display = display.all - display.status_line)
+plot(activeWindow() ? pulseSmooth : na, title = "Velocity Pulse", color = histTone, style = plot.style_columns, display = display.all - display.status_line)
+plotcandle(open, high, low, close,
+    title       = "Reactive Candles",
+    color       = paintBars ? bodyTone : na,
+    wickcolor   = paintBars ? wickTone : na,
+    bordercolor = paintBars ? edgeTone : na,
+    force_overlay = true)
+//==== ALERTS ============================================================
+pulseUpCross = pulse >= 0 and pulse[1] < 0
+pulseDnCross = pulse <  0 and pulse[1] >= 0
+alertcondition(upFlipMark,   title = "MSL Bull Flip",     message = "MSL Trend Pulse: basis flipped bullish.")
+alertcondition(dnFlipMark,   title = "MSL Bear Flip",     message = "MSL Trend Pulse: basis flipped bearish.")
+alertcondition(pulseUpCross, title = "MSL Velocity Up",   message = "MSL Trend Pulse: velocity crossed above zero.")
+alertcondition(pulseDnCross, title = "MSL Velocity Down", message = "MSL Trend Pulse: velocity crossed below zero.")
+//==== TABLE =============================================================
+if barstate.islast and showTable
+    tideText  = tideUp ? "Bullish" : tideDn ? "Bearish" : "Neutral"
+    tideColor = tideUp ? color.new(bullColor, 0) : tideDn ? color.new(bearColor, 0) : color.new(#8A94A6, 0)
+    magText  = labelMagnitude(pulseRatioAbs)
+    magColor = magText == "Weak" ? color.new(#A3ACBA, 0) : magText == "Normal" ? color.new(#D7DEE9, 0) : magText == "Strong" ? color.new(bullColor, 0) : color.new(#F5A524, 0)
+    phaseText  = pulseUp and tideUp ? "Bullish Impulse" : pulseUp and tideDn ? "Bullish Pullback" : not pulseUp and tideUp ? "Bearish Pullback" : not pulseUp and tideDn ? "Bearish Impulse" : "Neutral"
+    phaseColor = phaseText == "Bullish Impulse" ? color.new(bullColor, 0) : phaseText == "Bearish Impulse" ? color.new(bearColor, 0) : phaseText == "Bullish Pullback" ? color.new(#59B3A9, 0) : phaseText == "Bearish Pullback" ? color.new(#F5A524, 0) : color.new(#A3ACBA, 0)
+    stateText  = labelState(pulseRatioAbs, pulseUp, tideUp, tideDn)
+    stateColor = stateText == "Overheated" ? color.new(#F5A524, 0) : stateText == "Expansion" ? phaseColor : stateText == "Cooling" ? color.new(#8EA7C2, 0) : color.new(#D7DEE9, 0)
+    headerBg    = color.new(#101722, 0)
+    leftColBg   = color.new(#111827, 12)
+    borderColor = color.new(#2A3445, 0)
+    textColor   = color.new(#D7DEE9, 0)
+    var table proTable = table.new(position.top_right, 2, 5, force_overlay = true)
+    table.cell(proTable, 0, 0, "MSL TREND PULSE", text_color = textColor,  bgcolor = headerBg,  text_size = size.small)
+    table.cell(proTable, 1, 0, "",                text_color = textColor,  bgcolor = headerBg,  text_size = size.small)
+    table.cell(proTable, 0, 1, "Phase",           text_color = textColor,  bgcolor = leftColBg, text_size = size.small)
+    table.cell(proTable, 1, 1, phaseText,         text_color = phaseColor, bgcolor = leftColBg, text_size = size.small)
+    table.cell(proTable, 0, 2, "Magnitude",       text_color = textColor,  bgcolor = leftColBg, text_size = size.small)
+    table.cell(proTable, 1, 2, magText,           text_color = magColor,   bgcolor = leftColBg, text_size = size.small)
+    table.cell(proTable, 0, 3, "Bias",            text_color = textColor,  bgcolor = leftColBg, text_size = size.small)
+    table.cell(proTable, 1, 3, tideText,          text_color = tideColor,  bgcolor = leftColBg, text_size = size.small)
+    table.cell(proTable, 0, 4, "State",           text_color = textColor,  bgcolor = leftColBg, text_size = size.small)
+    table.cell(proTable, 1, 4, stateText,         text_color = stateColor, bgcolor = leftColBg, text_size = size.small)
+    table.set_border_color(proTable, borderColor)
+    table.set_frame_color(proTable,  borderColor)
+    table.set_frame_width(proTable,  1)
+    table.set_border_width(proTable, 1)
+//==== USAGE GUIDE =======================================================
+// What it does:
+//   Plots an Adaptive EMA basis on the price chart that speeds up when price
+//   accelerates and slows down on quiet bars. In the pane, a cumulative velocity
+//   oscillator measures how strongly smoothed close pulls away from smoothed
+//   open since the last basis flip. The histogram is colored by velocity
+//   magnitude on a gradient (soft = weak, vivid = strong).
+//
+// Signals:
+//   - Bull Flip   - close crosses above the basis. Diamond on the basis line.
+//   - Bear Flip   - close crosses below the basis. Diamond on the basis line.
+//   - Velocity Up - histogram crosses above zero (early bull pressure).
+//   - Velocity Dn - histogram crosses below zero (early bear pressure).
+//
+// Dashboard:
+//   - Phase     - Bullish/Bearish Impulse (velocity aligned with Bias) vs
+//                 Pullback (velocity fighting the Bias).
+//   - Magnitude - Weak / Normal / Strong / Extreme. Current velocity vs the
+//                 average velocity of recent same-side waves.
+//   - Bias      - average bull wave peak vs average bear wave trough across the
+//                 last N completed waves.
+//   - State     - Overheated / Expansion / Cooling / Neutral, derived from
+//                 Magnitude and Phase alignment.
+//
+// Suggested timeframes: H1 and above. H4 / D1 give the cleanest waves.
+//
+// Tips:
+//   - Use Bull/Bear Flip diamonds as primary regime cues; use Velocity Up/Dn
+//     as finer entry triggers when aligned with the Bias.
+//   - Extreme + Pullback usually marks the end of a counter-move, not a reversal.
+//   - Raise Maximum Length to smooth the basis on choppy assets.
+//   - Set Window = Custom + a recent Start Date to focus the dashboard on the
+//     current market regime only.
