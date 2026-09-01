@@ -1,0 +1,67 @@
+//@version=4 
+strategy("RC Bot Strategy with SL & TP", overlay=true, pyramiding=0, default_qty_type=strategy.percent_of_equity, default_qty_value=10) 
+ 
+// Inputs 
+a      = input(1,     title = "Key Vaule. 'This changes the sensitivity'") 
+c      = input(10,    title = "ATR Period") 
+h      = input(false, title = "Signals from Heikin Ashi Candles") 
+ 
+useATR = input(true,  title = "Use ATR-based SL/TP? (If false → % based)") 
+slATR  = input(1.5,   title = "ATR Multiplier for Stop Loss") 
+tpATR  = input(3.0,   title = "ATR Multiplier for Take Profit") 
+slPerc = input(2.0,   title = "Stop Loss % (if not using ATR)", minval=0.1, step=0.1) 
+tpPerc = input(4.0,   title = "Take Profit % (if not using ATR)", minval=0.1, step=0.1) 
+ 
+xATR  = atr(c) 
+nLoss = a * xATR 
+ 
+src = h ? security(heikinashi(syminfo.tickerid), timeframe.period, close, lookahead = false) : close 
+ 
+xATRTrailingStop = 0.0 
+xATRTrailingStop := iff(src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0), max(nz(xATRTrailingStop[1]), src - nLoss), 
+   iff(src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0), min(nz(xATRTrailingStop[1]), src + nLoss),  
+   iff(src > nz(xATRTrailingStop[1], 0), src - nLoss, src + nLoss))) 
+  
+pos = 0    
+pos := iff(src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0), 1, 
+   iff(src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0), -1, nz(pos[1], 0)))  
+    
+ema   = ema(src,1) 
+above = crossover(ema, xATRTrailingStop) 
+below = crossover(xATRTrailingStop, ema) 
+ 
+buy  = src > xATRTrailingStop and above  
+sell = src < xATRTrailingStop and below 
+ 
+barbuy  = src > xATRTrailingStop  
+barsell = src < xATRTrailingStop  
+ 
+// Plot buy/sell signals 
+plotshape(buy,  title = "Buy",  text = 'Buy',  style = shape.labelup,   location = location.belowbar, color= color.green, textcolor = color.white, transp = 0, size = size.tiny) 
+plotshape(sell, title = "Sell", text = 'Sell', style = shape.labeldown, location = location.abovebar, color= color.red,   textcolor = color.white, transp = 0, size = size.tiny) 
+ 
+barcolor(barbuy  ? color.green : na) 
+barcolor(barsell ? color.red   : na) 
+ 
+// Alerts 
+alertcondition(buy,  "RC Long",  "RC Long") 
+alertcondition(sell, "RC Short", "RC Short") 
+ 
+// =============================== 
+// Strategy Backtest Logic 
+// =============================== 
+if (buy) 
+    if (useATR) 
+        strategy.entry("RC Long", strategy.long) 
+        strategy.exit("RC Long Exit", from_entry="RC Long", stop = src - slATR * xATR, limit = src + tpATR * xATR) 
+    else 
+        strategy.entry("RC Long", strategy.long) 
+        strategy.exit("RC Long Exit", from_entry="RC Long", stop = src * (1 - slPerc/100), limit = src * (1 + tpPerc/100)) 
+ 
+if (sell) 
+    if (useATR) 
+        strategy.entry("RC Short", strategy.short) 
+        strategy.exit("RC Short Exit", from_entry="RC Short", stop = src + slATR * xATR, limit = src - tpATR * xATR) 
+    else 
+        strategy.entry("RC Short", strategy.short) 
+        strategy.exit("RC Short Exit", from_entry="RC Short", stop = src * (1 + slPerc/100), limit = src * (1 - tpPerc/100))
